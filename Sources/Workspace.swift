@@ -12,6 +12,8 @@ private struct Grab {
     let point: Vec3
     let initialPan: Vec2
     let distance: Float
+    let initialScroll: Float
+    var dragTarget: Float?
     var moved = false
 }
 
@@ -97,9 +99,22 @@ final class Workspace {
         }
         for panel in panels { panel.placement.face(center) }
         for (pointer, hand) in zip(pointers, hands) { update(pointer, with: hand, at: hostTime) }
+        for (pointer, hand) in zip(pointers, hands) where abs(hand.stickY) > 0.15 {
+            pointer.hit = pointer.ray.flatMap(pick)
+        }
         var updatedFrames = 0
         var canStartThumbnail = !panels.contains { $0.hasThumbnailJob }
         for panel in panels {
+            if panel.browser {
+                let grab = pointers.compactMap(\.grab).first { $0.panel === panel }
+                var stick: Float = 0
+                if grab == nil {
+                    for (pointer, hand) in zip(pointers, hands) where pointer.hit?.panel === panel && pointer.button == nil {
+                        if abs(hand.stickY) > abs(stick) { stick = hand.stickY }
+                    }
+                }
+                panel.updateScroll(dragTarget: grab?.dragTarget, stick: stick, delta: delta)
+            }
             if panel.update(hostTime: hostTime, cache: cache, loadThumbnails: canStartThumbnail) {
                 updatedFrames += 1
             }
@@ -274,13 +289,19 @@ final class Workspace {
         if !(button == .squeeze ? squeeze : trigger) {
             pointer.button = nil
             pointer.acceptsPress = !trigger && !squeeze
-            if let grab = pointer.grab {
-                if grab.action == .seek, let hit = grab.panel.placement.hit(ray) {
+            if var grab = pointer.grab {
+                if grab.dragTarget != nil {
+                    apply(&grab, ray: ray)
+                    if !grab.moved, case .entry(let index) = grab.action,
+                       let hit = pick(ray), hit.panel === grab.panel, hit.action == grab.action {
+                        selectEntry(index, on: grab.panel)
+                    }
+                } else if grab.action == .seek, let hit = grab.panel.placement.hit(ray) {
                     seek(grab.panel, at: hit.uv.x, precise: true)
                 } else if grab.action == .media && !grab.moved && grab.panel.playback != nil {
                     grab.panel.toggleControls(at: time)
                 }
-                dirty = true
+                if grab.dragTarget == nil { dirty = true }
             }
             pointer.grab = nil
             pointer.emptyPress = nil
@@ -332,10 +353,14 @@ final class Workspace {
                     let buttons = ui.playbackButtons(playback, video: panel.canShowPanorama, panorama: panorama === panel)
                     action = ui.seek.contains(point) ? .seek : buttons.first { $0.rect.contains(point) }?.action
                 } else if inBody {
-                    if panel.browser, let button = panel.browserButtons().first(where: { $0.rect.contains(point) }) {
+                    if panel.browser, let button = [ui.close, ui.exit].first(where: { $0.rect.contains(point) }) {
                         action = button.action
-                    } else if panel.browser, let card = ui.cardIndex(at: point), card < panel.visibleEntries.count {
-                        action = .entry(panel.visibleEntries.startIndex + card)
+                    } else if panel.browser, ui.viewport.contains(point) {
+                        if let index = ui.cardIndex(at: point, offset: panel.scrollOffset), panel.entries.indices.contains(index) {
+                            action = .entry(index)
+                        } else {
+                            action = .scroll
+                        }
                     } else if !panel.browser, ui.back.rect.contains(point) {
                         action = .back
                     } else {
@@ -351,28 +376,23 @@ final class Workspace {
     private func press(_ action: PanelAction, hit: Hit, ray: Ray, pointer: Pointer) {
         let panel = hit.panel
         switch action {
-        case .move, .resize, .seek, .media:
+        case .move, .resize, .seek, .media, .entry, .scroll:
             pointer.grab = Grab(panel: panel, action: action, initial: panel.placement,
-                                point: ray.point(at: hit.distance), initialPan: panel.pan, distance: hit.distance)
+                                point: ray.point(at: hit.distance), initialPan: panel.pan, distance: hit.distance,
+                                initialScroll: panel.scrollOffset)
+            switch action {
+            case .entry, .scroll:
+                panel.stopScrolling()
+                pointer.grab?.dragTarget = panel.scrollOffset
+            default: break
+            }
         case .close:
             if panorama === panel { panorama = nil }
             panels.removeAll { $0 === panel }
         case .exit: wantsExit = true
-        case .previous: panel.changePage(to: panel.page - 1)
-        case .next: panel.changePage(to: panel.page + 1)
         case .back:
             if panorama === panel { panorama = nil }
-            panel.browse(panel.directory)
-        case .entry(let index):
-            guard panel.visibleEntries.indices.contains(index) else { return }
-            let entry = panel.entries[index]
-            let resolved = entry.url.resolvingSymlinksInPath()
-            guard isInside(resolved, root: root) else { return }
-            if entry.kind == .folder { panel.browse(resolved) }
-            else {
-                panel.open(entry, at: lastTime)
-                if diagnostics { print("Opened \(entry.kind.rawValue): \(entry.name)") }
-            }
+            panel.browse(panel.directory, offset: panel.scrollOffset)
         case .play: panel.playback?.togglePaused()
         case .mute:
             if let playback = panel.playback { playback.muted.toggle() }
@@ -390,6 +410,18 @@ final class Workspace {
         case .panorama: togglePanorama(panel)
         }
         if pointer.grab == nil { dirty = true }
+    }
+
+    private func selectEntry(_ index: Int, on panel: Panel) {
+        let entry = panel.entries[index]
+        guard isInside(entry.url.resolvingSymlinksInPath(), root: root) else { return }
+        if entry.kind == .folder {
+            panel.openFolder(entry)
+        } else {
+            panel.open(entry, at: lastTime)
+            if diagnostics { print("Opened \(entry.kind.rawValue): \(entry.name)") }
+        }
+        dirty = true
     }
 
     private func togglePanorama(_ panel: Panel) {
@@ -412,6 +444,12 @@ final class Workspace {
     private func apply(_ grab: inout Grab, ray: Ray) {
         let panel = grab.panel
         switch grab.action {
+        case .entry, .scroll:
+            guard let intersection = grab.initial.hit(ray) else { return }
+            let local = grab.initial.localOffset(ray.point(at: intersection.distance) - grab.point)
+            guard grab.moved || simd_length(local) > 0.012 else { return }
+            grab.moved = true
+            grab.dragTarget = grab.initialScroll + local.y
         case .move:
             panel.placement.center = grab.initial.center + ray.point(at: grab.distance) - grab.point
             panel.placement.face(head.position.vector)
@@ -424,6 +462,9 @@ final class Workspace {
             panel.placement.center = grab.initial.center + grab.initial.right * offset.x + grab.initial.up * offset.y
             panel.placement.face(head.position.vector)
             panel.placement.size = size
+            if panel.browser, !panel.loading {
+                panel.reflowScroll(from: PanelUI(size: grab.initial.size), offset: grab.initialScroll)
+            }
         case .seek:
             if let hit = panel.placement.hit(ray) { seek(panel, at: hit.uv.x, precise: false) }
         case .media:

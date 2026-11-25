@@ -4,7 +4,7 @@ import Foundation
 import Metal
 
 enum PanelAction: Equatable {
-    case back, close, exit, previous, next, entry(Int)
+    case back, close, exit, scroll, entry(Int)
     case media, play, mute, loopStart, loopEnd, panorama, seek
     case move(Vec2), resize(Vec2)
 }
@@ -23,12 +23,14 @@ struct PanelUI {
     static let margin: Float = 0.025
     static let background: Vec4 = [0.14, 0.14, 0.14, 1]
 
-    private var displayedCardSize: Vec2 {
-        Vec2(repeating: min(Self.cardSize.y, size.y - Self.gridTop - Self.footerHeight))
+    private let gap = Vec2(0.014, 0.0132)
+    var viewport: Rect { Rect(Self.margin, 0.112, size.x - 2 * Self.margin, size.y - 0.112 - Self.margin) }
+    var columns: Int {
+        let preferred = min(Self.cardSize.x, viewport.size.y)
+        return max(1, Int(ceil((viewport.size.x + gap.x) / (preferred + gap.x) - 0.00001)))
     }
-    private var cardStep: Vec2 { displayedCardSize + Vec2(0.014, 0.0132) }
-    private static let gridTop: Float = 0.112
-    private static let footerHeight: Float = 0.068
+    private var cardWidth: Float { (viewport.size.x + gap.x) / Float(columns) - gap.x }
+    var rowHeight: Float { cardWidth + gap.y }
 
     let size: Vec2
 
@@ -61,28 +63,28 @@ struct PanelUI {
                 Rect(x, side.y > 0 ? y + stroke : y + stroke - corner, stroke, corner - stroke)]
     }
 
-    var columns: Int {
-        1 + Int(max(0, size.x - 2 * Self.margin - displayedCardSize.x) / cardStep.x)
+    func scrollLimit(count: Int) -> Float {
+        let rows = (count + columns - 1) / columns
+        return max(0, Float(rows) * rowHeight - gap.y - viewport.size.y)
     }
 
-    var pageSize: Int {
-        let room = size.y - Self.gridTop - Self.footerHeight - displayedCardSize.y
-        return columns * (1 + Int(max(0, room) / cardStep.y))
+    func visibleRange(offset: Float, count: Int) -> Range<Int> {
+        let first = Int((offset + gap.y) / rowHeight)
+        let end = Int(ceil((offset + viewport.size.y) / rowHeight))
+        return min(first * columns, count)..<min(end * columns, count)
     }
 
-    func card(_ index: Int) -> Rect {
-        Rect(Self.margin + Float(index % columns) * cardStep.x,
-             Self.gridTop + Float(index / columns) * cardStep.y, displayedCardSize.x, displayedCardSize.y)
+    func card(_ index: Int, offset: Float) -> Rect {
+        Rect(viewport.origin.x + Float(index % columns) * (cardWidth + gap.x),
+             viewport.origin.y + Float(index / columns) * rowHeight - offset, cardWidth, cardWidth)
     }
 
-    func cardIndex(at point: Vec2) -> Int? {
-        let origin = Vec2(Self.margin, Self.gridTop)
-        guard point.x >= origin.x, point.y >= origin.y else { return nil }
-        let cell = (point - origin) / cardStep
-        let column = Int(cell.x), row = Int(cell.y)
-        guard column < columns else { return nil }
-        let index = row * columns + column
-        return index < pageSize && card(index).contains(point) ? index : nil
+    func cardIndex(at point: Vec2, offset: Float) -> Int? {
+        guard viewport.contains(point) else { return nil }
+        let local = point - viewport.origin
+        let column = Int(local.x / (cardWidth + gap.x))
+        let index = Int((local.y + offset) / rowHeight) * columns + column
+        return column < columns && card(index, offset: offset).contains(point) ? index : nil
     }
 
     var back: Button {
@@ -99,16 +101,6 @@ struct PanelUI {
         Rect(Self.margin, 0.017, max(0, exit.rect.origin.x - Self.margin - 0.012), 0.058)
     }
 
-    var next: Button {
-        Button(action: .next, rect: Rect(size.x - Self.margin - 0.105, size.y - 0.061, 0.105, 0.043), label: "Next")
-    }
-    var previous: Button {
-        Button(action: .previous, rect: Rect(next.rect.origin.x - 0.122, size.y - 0.061, 0.112, 0.043),
-               label: "Previous")
-    }
-    var pageNumber: Rect {
-        Rect(Self.margin, next.rect.origin.y, previous.rect.origin.x - Self.margin - 0.008, next.rect.size.y)
-    }
     var message: Rect {
         Rect(Self.margin, (size.y - 0.06) / 2, size.x - 2 * Self.margin, 0.06)
     }
@@ -153,7 +145,7 @@ struct PanelUI {
 }
 
 enum PanelLabel {
-    case title, message, pageNumber, playbackTime
+    case title, message, playbackTime
 }
 
 struct LabelTexture {

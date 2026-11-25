@@ -226,7 +226,7 @@ final class Renderer {
     private func prepareBrowser(_ panel: Panel, root: URL, output: inout RenderFrame) {
         let ui = panel.ui
         output.quad(panel.placement, .full, .fill(PanelUI.background))
-        drawButtons(panel.browserButtons(), on: panel, output: &output)
+        drawButtons([ui.close, ui.exit], on: panel, output: &output)
         let atRoot = panel.directory == root
         let path = atRoot ? root.lastPathComponent :
             panel.directory.pathComponents.dropFirst(root.pathComponents.count).joined(separator: " / ")
@@ -237,26 +237,29 @@ final class Renderer {
             let message = panel.listingError ?? (panel.loading ? "Loading…" : "No media in this folder")
             drawLabel(message, slot: .message, in: ui.message, on: panel, size: 29, centered: true, output: &output)
         }
-        for (index, entry) in visible.enumerated() {
-            let hovered = panel.hovered.contains(.entry(visible.startIndex + index))
+        for index in visible.indices {
+            let entry = visible[index]
+            let card = ui.card(index, offset: panel.scrollOffset)
+            let top = max(card.origin.y, ui.viewport.origin.y)
+            let bottom = min(card.origin.y + card.size.y, ui.viewport.origin.y + ui.viewport.size.y)
+            guard bottom > top else { continue }
+            let rect = Rect(card.origin.x, top, card.size.x, bottom - top).normalized(in: ui.size)
+            let crop = Rect(0, (top - card.origin.y) / card.size.y, 1, (bottom - top) / card.size.y)
+            let hovered = panel.hovered.contains(.entry(index))
             if cardBackgrounds[hovered] == nil {
                 cardBackgrounds[hovered] = Canvas.texture(device: device, pixels: Canvas.pixels(for: PanelUI.cardSize)) {
                     $0.fill(.full, white: hovered ? 0.255 : 0.161, rounded: true)
                 }
             }
             if let background = cardBackgrounds[hovered] {
-                output.quad(panel.placement, ui.card(index).normalized(in: ui.size), .texture(background), offset: 0.001)
+                output.quad(panel.placement, rect, .texture(background, crop), offset: 0.001)
             }
             if panel.cardTextures[entry.url] == nil {
                 panel.cardTextures[entry.url] = makeCard(entry, thumbnail: panel.thumbnails[entry.url])
             }
             if let texture = panel.cardTextures[entry.url] {
-                output.quad(panel.placement, ui.card(index).normalized(in: ui.size), .texture(texture), offset: 0.002)
+                output.quad(panel.placement, rect, .texture(texture, crop), offset: 0.002)
             }
-        }
-        if panel.pageCount > 1 {
-            drawLabel("\(panel.page + 1) / \(panel.pageCount)", slot: .pageNumber, in: ui.pageNumber, on: panel,
-                      size: 24, white: 0.73, output: &output)
         }
     }
 

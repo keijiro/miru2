@@ -24,8 +24,9 @@ final class Panel {
     private(set) var image: MTLTexture?
     private(set) var imageFailed = false
     private(set) var entries: [MediaEntry] = []
-    // Keep the first entry of the last selected page visible as the grid reflows.
-    private var pageAnchor = 0
+    private(set) var scrollOffset: Float = 0
+    private var scrollVelocity: Float = 0
+    private var parents: [(directory: URL, offset: Float)] = []
     private(set) var listingError: String?
     private(set) var thumbnails: [URL: CGImage] = [:]
     var cardTextures: [URL: MTLTexture] = [:]
@@ -71,11 +72,8 @@ final class Panel {
     var browser: Bool { entry == nil }
     var canShowPanorama: Bool { entry?.kind == .video && playback?.frame != nil }
     var ui: PanelUI { PanelUI(size: placement.size) }
-    var page: Int { pageAnchor / ui.pageSize }
-    var pageCount: Int { max(1, (entries.count + ui.pageSize - 1) / ui.pageSize) }
     var visibleEntries: ArraySlice<MediaEntry> {
-        let capacity = ui.pageSize
-        return entries.dropFirst(pageAnchor / capacity * capacity).prefix(capacity)
+        entries[ui.visibleRange(offset: scrollOffset, count: entries.count)]
     }
     var loading: Bool { listing != nil }
     var hasThumbnailJob: Bool { thumbnailLoad != nil }
@@ -120,7 +118,7 @@ final class Panel {
 
     deinit { thumbnailJob?.cancel() }
 
-    func browse(_ url: URL) {
+    func browse(_ url: URL, offset: Float = 0) {
         if !browser {
             entry = nil
             playback = nil
@@ -135,11 +133,50 @@ final class Panel {
         entries = []
         listingError = nil
         listing = loadDirectory(url, root: root)
-        changePage(to: 0)
+        scrollOffset = offset
+        scrollVelocity = 0
     }
 
-    func changePage(to index: Int) {
-        pageAnchor = clamp(index, 0, pageCount - 1) * ui.pageSize
+    func openFolder(_ folder: MediaEntry) {
+        if folder.isParent {
+            let parent = parents.popLast()
+            browse(parent?.directory ?? folder.url, offset: parent?.offset ?? 0)
+        } else {
+            parents.append((directory, scrollOffset))
+            browse(folder.url.resolvingSymlinksInPath())
+        }
+    }
+
+    func reflowScroll(from initial: PanelUI, offset: Float) {
+        let row = offset / initial.rowHeight
+        let firstEntry = Int(row) * initial.columns
+        let newRow = Float(firstEntry / ui.columns) + (row - floor(row))
+        scrollOffset = min(newRow * ui.rowHeight, ui.scrollLimit(count: entries.count))
+        scrollVelocity = 0
+    }
+
+    func stopScrolling() { scrollVelocity = 0 }
+
+    func updateScroll(dragTarget: Float?, stick: Float, delta: Float) {
+        guard browser, !loading else { return }
+        let dt = clamp(delta, 0, 0.05)
+        guard dt > 0 else { return }
+        let limit = ui.scrollLimit(count: entries.count)
+        if let dragTarget {
+            let target = clamp(dragTarget, 0, limit)
+            let movement = (target - scrollOffset) * (1 - exp(-40 * dt))
+            scrollOffset += movement
+            scrollVelocity += (movement / dt - scrollVelocity) * (1 - exp(-22 * dt))
+        } else {
+            let speed = -copysign(max(0, abs(stick) - 0.15) / 0.85, stick) * 1.4
+            scrollVelocity += (speed - scrollVelocity) * (1 - exp(-(speed == 0 ? 8 : 14) * dt))
+            if abs(scrollVelocity) < 0.001 && speed == 0 { scrollVelocity = 0 }
+            scrollOffset += scrollVelocity * dt
+        }
+        if scrollOffset <= 0 && scrollVelocity < 0 || scrollOffset >= limit && scrollVelocity > 0 {
+            scrollVelocity = 0
+        }
+        scrollOffset = clamp(scrollOffset, 0, limit)
     }
 
     private func resetThumbnails() {
@@ -216,11 +253,11 @@ final class Panel {
             case .success(let entries): self.entries = entries
             case .failure(let error): listingError = error.localizedDescription
             }
-            if directory != root {
-                let parent = MediaEntry(url: directory.deletingLastPathComponent(), kind: .folder, isParent: true)
+            if directory != root || !parents.isEmpty {
+                let parent = MediaEntry(url: parents.last?.directory ?? directory.deletingLastPathComponent(), kind: .folder, isParent: true)
                 entries.insert(parent, at: 0)
             }
-            changePage(to: 0)
+            scrollOffset = min(scrollOffset, ui.scrollLimit(count: entries.count))
         }
         if let result = imageLoad?.take() {
             imageLoad = nil
@@ -256,11 +293,4 @@ final class Panel {
                    loopStart: playback?.loopStart ?? 0, loopEnd: playback?.loopEnd)
     }
 
-    func browserButtons() -> [Button] {
-        let ui = ui
-        var buttons = [ui.close, ui.exit]
-        if page > 0 { buttons.append(ui.previous) }
-        if page + 1 < pageCount { buttons.append(ui.next) }
-        return buttons
-    }
 }
