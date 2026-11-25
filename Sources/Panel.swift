@@ -24,18 +24,24 @@ final class Panel {
     private(set) var image: MTLTexture?
     private(set) var imageFailed = false
     private(set) var entries: [MediaEntry] = []
-    private(set) var page = 0
+    // Keep the first entry of the last selected page visible as the grid reflows.
+    private var pageAnchor = 0
     private(set) var listingError: String?
     private(set) var thumbnails: [URL: CGImage] = [:]
-    private(set) var revision = 0
+    var cardTextures: [URL: MTLTexture] = [:]
+    var labelTextures: [PanelLabel: LabelTexture] = [:]
     var controls = false
     var pan = Vec2.zero
 
     var browser: Bool { entry == nil }
     var canShowPanorama: Bool { entry?.kind == .video && playback?.frame != nil }
-    var pageCount: Int { max(1, (entries.count + PanelUI.pageSize - 1) / PanelUI.pageSize) }
+    var ui: PanelUI { PanelUI(size: placement.size) }
+    var minimumSize: Vec2 { browser ? PanelUI.browserMinimum : PanelUI.mediaMinimum }
+    var page: Int { pageAnchor / ui.pageSize }
+    var pageCount: Int { max(1, (entries.count + ui.pageSize - 1) / ui.pageSize) }
     var visibleEntries: ArraySlice<MediaEntry> {
-        entries.dropFirst(page * PanelUI.pageSize).prefix(PanelUI.pageSize)
+        let capacity = ui.pageSize
+        return entries.dropFirst(pageAnchor / capacity * capacity).prefix(capacity)
     }
     var loading: Bool { listing != nil }
     var hasThumbnailJob: Bool { thumbnailLoad != nil }
@@ -59,17 +65,14 @@ final class Panel {
         let start = (Vec2(repeating: 1) - pan) * cropped * 0.5
         return Rect(start.x, start.y, 1 - cropped.x, 1 - cropped.y)
     }
-    var chromeKey: String?
-    var chrome: MTLTexture?
-    var headerKey: Int?
-    var header: MTLTexture?
-    var transportKey: String?
-    var transport: MTLTexture?
 
     private var listing: MediaLoad<Result<[MediaEntry], Error>>?
     private var imageLoad: MediaLoad<MTLTexture?>?
     private var thumbnailLoad: MediaLoad<(URL, CGImage?)>?
     private var thumbnailJob: Task<Void, Never>?
+    private var thumbnailURL: URL?
+    private var thumbnailRange: Range<Int>?
+    private var attemptedThumbnails: Set<URL> = []
     private var remainingThumbnails: ArraySlice<MediaEntry> = []
     private var sizeToFit: Float?
     private let device: MTLDevice
@@ -93,10 +96,9 @@ final class Panel {
             imageLoad = nil
             sizeToFit = nil
             controls = false
-            transport = nil
-            transportKey = nil
         }
         directory = url
+        resetThumbnails()
         entries = []
         listingError = nil
         listing = loadDirectory(url, root: root)
@@ -104,23 +106,45 @@ final class Panel {
     }
 
     func changePage(to index: Int) {
-        page = clamp(index, 0, pageCount - 1)
+        pageAnchor = clamp(index, 0, pageCount - 1) * ui.pageSize
+    }
+
+    private func resetThumbnails() {
         thumbnailJob?.cancel()
         thumbnailJob = nil
         thumbnailLoad = nil
-        thumbnails = [:]
-        remainingThumbnails = visibleEntries.filter { $0.kind == .image || $0.kind == .video }[...]
-        revision += 1
+        thumbnailURL = nil
+        thumbnailRange = nil
+        attemptedThumbnails.removeAll()
+        remainingThumbnails = []
+        thumbnails.removeAll()
+        cardTextures.removeAll()
+    }
+
+    private func updateThumbnailRange() {
+        let visible = visibleEntries
+        guard thumbnailRange != visible.indices else { return }
+        thumbnailRange = visible.indices
+        let urls = Set(visible.map(\.url))
+        if let thumbnailURL, !urls.contains(thumbnailURL) {
+            thumbnailJob?.cancel()
+            thumbnailJob = nil
+            thumbnailLoad = nil
+            self.thumbnailURL = nil
+        }
+        attemptedThumbnails.formIntersection(urls)
+        thumbnails = thumbnails.filter { urls.contains($0.key) }
+        cardTextures = cardTextures.filter { urls.contains($0.key) }
+        remainingThumbnails = visible.filter {
+            ($0.kind == .image || $0.kind == .video) &&
+            $0.url != thumbnailURL && !attemptedThumbnails.contains($0.url)
+        }[...]
     }
 
     func open(_ entry: MediaEntry, state: SavedPanel? = nil, fit: Bool) {
         listing = nil
         entries = []
-        thumbnailJob?.cancel()
-        thumbnailJob = nil
-        thumbnailLoad = nil
-        remainingThumbnails = []
-        thumbnails = [:]
+        resetThumbnails()
         self.entry = entry
         if let stored = state?.pan, stored.allFinite {
             pan = simd_clamp(stored, Vec2(repeating: -1), Vec2(repeating: 1))
@@ -128,7 +152,6 @@ final class Panel {
             pan = .zero
         }
         controls = entry.kind == .audio
-        revision += 1
         image = nil
         imageFailed = false
         if entry.kind == .image {
@@ -156,14 +179,21 @@ final class Panel {
             image = result
             imageFailed = result == nil
         }
+        if browser { updateThumbnailRange() }
         if let (url, image) = thumbnailLoad?.take() {
             thumbnailLoad = nil
             thumbnailJob = nil
-            if let image { thumbnails[url] = image; revision += 1 }
+            thumbnailURL = nil
+            attemptedThumbnails.insert(url)
+            if let image {
+                thumbnails[url] = image
+                cardTextures.removeValue(forKey: url)
+            }
         }
         if loadThumbnails, thumbnailLoad == nil, let next = remainingThumbnails.popFirst() {
             let result = MediaLoad<(URL, CGImage?)>()
             thumbnailLoad = result
+            thumbnailURL = next.url
             thumbnailJob = Task.detached(priority: .utility) {
                 result.complete((next.url, await loadThumbnail(next)))
             }
@@ -173,10 +203,10 @@ final class Panel {
         if let width = sizeToFit {
             let aspect = image.map { Float($0.width) / Float($0.height) } ?? playback?.aspect
             if let aspect {
-                placement.size.y = width / clamp(aspect, 0.52, 3.0)
+                placement.size.y = max(minimumSize.y, width / clamp(aspect, 0.52, 3.0))
                 sizeToFit = nil
             } else if entry?.kind == .audio {
-                placement.size.y = width * 0.48
+                placement.size.y = max(minimumSize.y, width * 0.48)
                 sizeToFit = nil
             }
         }
@@ -191,21 +221,26 @@ final class Panel {
                    loopStart: playback?.loopStart ?? 0, loopEnd: playback?.loopEnd)
     }
 
-    func buttons(root: URL, transportVisible: Bool, panorama: Bool) -> [Button] {
+    func buttons(panorama: Bool) -> [Button] {
+        let ui = ui
         if browser {
-            var buttons = [PanelUI.close, PanelUI.exit]
-            if directory != root { buttons.append(PanelUI.up) }
-            if page > 0 { buttons.append(PanelUI.previous) }
-            if page + 1 < pageCount { buttons.append(PanelUI.next) }
-            for (index, _) in visibleEntries.enumerated() {
-                buttons.append(Button(action: .entry(index), rect: PanelUI.card(index), label: ""))
-            }
+            var buttons = [ui.close, ui.exit]
+            if directory != root { buttons.append(ui.up) }
+            if page > 0 { buttons.append(ui.previous) }
+            if page + 1 < pageCount { buttons.append(ui.next) }
             return buttons
         }
-        var buttons = [PanelUI.close, PanelUI.back]
-        if transportVisible, let playback {
-            buttons += PanelUI.playbackButtons(playback, video: canShowPanorama, panorama: panorama)
+        var buttons = [ui.close, ui.back]
+        if controls, let playback {
+            buttons += ui.playbackButtons(playback, video: canShowPanorama, panorama: panorama)
         }
         return buttons
+    }
+
+    func buttonRect(for action: PanelAction, panorama: Bool) -> Rect? {
+        if case .entry(let index) = action, visibleEntries.indices.contains(index) {
+            return ui.card(index - visibleEntries.startIndex)
+        }
+        return buttons(panorama: panorama).first { $0.action == action }?.rect
     }
 }

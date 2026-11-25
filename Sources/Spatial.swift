@@ -96,6 +96,10 @@ struct Rect: Equatable {
 
     static let full = Rect(0, 0, 1, 1)
 
+    func normalized(in extent: Vec2) -> Rect {
+        Rect(origin.x / extent.x, origin.y / extent.y, size.x / extent.x, size.y / extent.y)
+    }
+
     func contains(_ uv: Vec2) -> Bool {
         uv.x >= origin.x && uv.y >= origin.y && uv.x <= origin.x + size.x && uv.y <= origin.y + size.y
     }

@@ -1,4 +1,5 @@
 import COpenXR
+import CoreGraphics
 import Foundation
 import Metal
 import simd
@@ -44,6 +45,12 @@ struct RenderFrame {
     }
 }
 
+private struct ButtonStyle: Hashable {
+    let label: String
+    let pixels: SIMD2<Int>
+    let active: Bool
+}
+
 final class Renderer {
     private let device: MTLDevice
     private let solid: MTLRenderPipelineState
@@ -52,6 +59,7 @@ final class Renderer {
     private let panoramic: MTLRenderPipelineState
     private let depth: MTLDepthStencilState
     private let backgroundDepth: MTLDepthStencilState
+    private var buttonTextures: [ButtonStyle: MTLTexture] = [:]
 
     init(device: MTLDevice, format: MTLPixelFormat, shaders: URL, sampleCount: Int) throws {
         self.device = device
@@ -118,9 +126,9 @@ final class Renderer {
                     let origin = corner * (Vec2(repeating: 1) - size)
                     output.outline(Rect(origin.x, origin.y, size.x, size.y), on: panel.placement,
                                    color: [0.93, 0.93, 0.93, 0.96])
-                } else if let button = panel.buttons(root: workspace.root, transportVisible: panel.controls,
-                                                     panorama: workspace.panorama === panel).first(where: { $0.action == action }) {
-                    output.outline(button.rect, on: panel.placement, color: [0.9, 0.9, 0.9, 0.8])
+                } else if let rect = panel.buttonRect(for: action, panorama: panorama === panel) {
+                    output.outline(rect.normalized(in: panel.placement.size), on: panel.placement,
+                                   color: [0.9, 0.9, 0.9, 0.8])
                 }
             }
         }
@@ -147,49 +155,87 @@ final class Renderer {
                                       Vec4((start + end) * 0.5, 1)))
     }
 
-    private func prepareBrowser(_ panel: Panel, root: URL, output: inout RenderFrame) {
-        let key = "browser:\(panel.revision)"
-        if panel.chromeKey != key {
-            panel.chromeKey = key
-            let buttons = panel.buttons(root: root, transportVisible: false, panorama: false)
-            panel.chrome = Canvas.texture(device: device) { canvas in
-                canvas.fill(.full, white: Canvas.background)
-                for button in buttons where !button.label.isEmpty { canvas.button(button) }
-                let path = panel.directory == root ? root.lastPathComponent :
-                    panel.directory.pathComponents.dropFirst(root.pathComponents.count).joined(separator: " / ")
-                let start: Float = panel.directory == root ? 0.035 : 0.17
-                canvas.text(path.isEmpty ? "/" : path, in: Rect(start, 0.027, 0.69 - start, 0.088), size: 29)
-                canvas.fill(Rect(0.025, 0.135, 0.95, 0.002), white: 0.30)
-                if let error = panel.listingError {
-                    canvas.text(error, in: Rect(0.045, 0.34, 0.91, 0.13), size: 29)
-                } else if panel.visibleEntries.isEmpty {
-                    let message = panel.loading ? "Loading…" : "No media in this folder"
-                    canvas.text(message, in: Rect(0.045, 0.35, 0.91, 0.12), size: 30, centered: true)
-                }
-                for (index, entry) in panel.visibleEntries.enumerated() {
-                    let card = PanelUI.card(index)
-                    canvas.fill(card, white: 0.19, rounded: true)
-                    let preview = Rect(card.origin.x + 0.012, card.origin.y + 0.014, card.size.x - 0.024, 0.222)
-                    if let image = panel.thumbnails[entry.url] {
-                        canvas.thumbnail(image, in: preview)
-                    } else {
-                        canvas.fill(preview, white: 0.16, rounded: true)
-                        canvas.text(entry.kind.rawValue.capitalized, in: preview, size: 24, white: 0.71, centered: true)
-                    }
-                    canvas.text(entry.name, in: Rect(preview.origin.x + 0.003, card.origin.y + 0.25,
-                                                    preview.size.x - 0.006, 0.053), size: 23)
-                }
-                if panel.pageCount > 1 {
-                    canvas.text("\(panel.page + 1) / \(panel.pageCount)", in: Rect(0.035, 0.88, 0.42, 0.085),
-                                size: 24, white: 0.73)
+    private func drawButtons(_ buttons: [Button], on panel: Panel, output: inout RenderFrame) {
+        for button in buttons {
+            let pixels = Canvas.pixels(for: button.rect.size)
+            let style = ButtonStyle(label: button.label, pixels: pixels, active: button.active)
+            if buttonTextures[style] == nil {
+                buttonTextures[style] = Canvas.texture(device: device, pixels: pixels) { canvas in
+                    canvas.fill(.full, white: button.active ? 0.38 : 0.22, rounded: true)
+                    canvas.text(button.label, in: .full, size: 25, centered: true)
                 }
             }
+            if let texture = buttonTextures[style] {
+                output.quad(panel.placement, button.rect.normalized(in: panel.placement.size),
+                            .texture(texture), offset: 0.003)
+            }
         }
-        if let chrome = panel.chrome { output.quad(panel.placement, .full, .texture(chrome)) }
+    }
+
+    private func drawLabel(_ value: String, slot: PanelLabel, in rect: Rect, on panel: Panel, size: CGFloat,
+                           white: CGFloat = 0.93, centered: Bool = false, output: inout RenderFrame) {
+        let pixels = Canvas.pixels(for: rect.size)
+        guard pixels.x >= Int(size), pixels.y > 0 else { return }
+        let cached = panel.labelTextures[slot]
+        if cached?.value != value || cached?.pixels != pixels {
+            panel.labelTextures[slot] = Canvas.texture(device: device, pixels: pixels) {
+                $0.text(value, in: .full, size: size, white: white, centered: centered)
+            }.map { LabelTexture(value: value, pixels: pixels, texture: $0) }
+        }
+        if let label = panel.labelTextures[slot] {
+            output.quad(panel.placement, rect.normalized(in: panel.placement.size), .texture(label.texture),
+                        offset: 0.003)
+        }
+    }
+
+    private func prepareBrowser(_ panel: Panel, root: URL, output: inout RenderFrame) {
+        let ui = panel.ui
+        output.quad(panel.placement, .full, .fill(PanelUI.background))
+        drawButtons(panel.buttons(panorama: false), on: panel, output: &output)
+        let atRoot = panel.directory == root
+        let path = atRoot ? root.lastPathComponent :
+            panel.directory.pathComponents.dropFirst(root.pathComponents.count).joined(separator: " / ")
+        drawLabel(path.isEmpty ? "/" : path, slot: .title, in: ui.title(browser: true, atRoot: atRoot),
+                  on: panel, size: 28, output: &output)
+        output.quad(panel.placement, ui.divider.normalized(in: ui.size), .fill([0.3, 0.3, 0.3, 1]), offset: 0.002)
+        let visible = panel.visibleEntries
+        if visible.isEmpty {
+            let message = panel.listingError ?? (panel.loading ? "Loading…" : "No media in this folder")
+            drawLabel(message, slot: .message, in: ui.message, on: panel, size: 29, centered: true, output: &output)
+        }
+        for (index, entry) in visible.enumerated() {
+            if panel.cardTextures[entry.url] == nil {
+                panel.cardTextures[entry.url] = makeCard(entry, thumbnail: panel.thumbnails[entry.url])
+            }
+            if let texture = panel.cardTextures[entry.url] {
+                output.quad(panel.placement, ui.card(index).normalized(in: ui.size), .texture(texture), offset: 0.002)
+            }
+        }
+        if panel.pageCount > 1 {
+            drawLabel("\(panel.page + 1) / \(panel.pageCount)", slot: .pageNumber, in: ui.pageNumber, on: panel,
+                      size: 24, white: 0.73, output: &output)
+        }
+    }
+
+    private func makeCard(_ entry: MediaEntry, thumbnail: CGImage?) -> MTLTexture? {
+        let size = PanelUI.cardSize
+        return Canvas.texture(device: device, pixels: Canvas.pixels(for: size)) { canvas in
+            canvas.fill(.full, white: 0.19, rounded: true)
+            let preview = Rect(0.012, 0.009, size.x - 0.024, 0.1465).normalized(in: size)
+            if let thumbnail {
+                canvas.thumbnail(thumbnail, in: preview)
+            } else {
+                canvas.fill(preview, white: 0.16, rounded: true)
+                canvas.text(entry.kind.rawValue.capitalized, in: preview, size: 24, white: 0.71, centered: true)
+            }
+            let label = Rect(0.015, 0.165, size.x - 0.03, 0.035)
+            canvas.text(entry.name, in: label.normalized(in: size), size: 23)
+        }
     }
 
     private func prepareMedia(_ panel: Panel, header: Bool, isPanorama: Bool, output: inout RenderFrame) {
         guard let entry = panel.entry else { return }
+        let ui = panel.ui
         let playback = panel.playback
         if let frame = playback?.frame, let playback {
             if isPanorama {
@@ -206,29 +252,14 @@ final class Renderer {
             else if playback?.videoUnavailable == true { status = "Could not decode video" }
             else if entry.kind == .audio { status = entry.name }
             else { status = "Loading…" }
-            let key = "status:\(panel.revision):\(status)"
-            if panel.chromeKey != key {
-                panel.chromeKey = key
-                panel.chrome = Canvas.texture(device: device, height: 480) { canvas in
-                    canvas.fill(.full, white: Canvas.background)
-                    canvas.text(status, in: Rect(0.06, 0.31, 0.88, 0.2), size: 34, centered: true)
-                }
-            }
-            if let chrome = panel.chrome { output.quad(panel.placement, .full, .texture(chrome)) }
+            output.quad(panel.placement, .full, .fill(PanelUI.background))
+            drawLabel(status, slot: .message, in: ui.message, on: panel, size: 29, centered: true, output: &output)
         }
         if header {
-            if panel.headerKey != panel.revision {
-                panel.headerKey = panel.revision
-                panel.header = Canvas.texture(device: device, height: 100) { canvas in
-                    canvas.fill(.full, white: Canvas.background)
-                    canvas.button(PanelUI.back, relativeTo: PanelUI.header)
-                    canvas.button(PanelUI.close, relativeTo: PanelUI.header)
-                    canvas.text(entry.name, in: Rect(0.178, 0, 0.64, 1), size: 28)
-                }
-            }
-            if let header = panel.header {
-                output.quad(panel.placement, PanelUI.header, .texture(header), offset: 0.002)
-            }
+            output.quad(panel.placement, ui.header.normalized(in: ui.size), .fill(PanelUI.background), offset: 0.002)
+            drawButtons([ui.back, ui.close], on: panel, output: &output)
+            drawLabel(entry.name, slot: .title, in: ui.title(browser: false, atRoot: false), on: panel,
+                      size: 28, output: &output)
         }
         if panel.controls, let playback {
             prepareTransport(panel, playback: playback, video: panel.canShowPanorama,
@@ -238,35 +269,25 @@ final class Renderer {
 
     private func prepareTransport(_ panel: Panel, playback: Playback, video: Bool, panorama: Bool,
                                   output: inout RenderFrame) {
-        let time = clockText(playback.time)
-        let duration = clockText(playback.duration)
-        let key = "\(panel.revision):\(time):\(duration):\(playback.paused):\(playback.muted):\(playback.loopStart > 0):\(playback.loopEnd != nil):\(video):\(panorama)"
-        if panel.transportKey != key {
-            panel.transportKey = key
-            panel.transport = Canvas.texture(device: device, height: 180) { canvas in
-                canvas.fill(.full, white: Canvas.background)
-                for button in PanelUI.playbackButtons(playback, video: video, panorama: panorama) {
-                    canvas.button(button, relativeTo: PanelUI.transport)
-                }
-                canvas.text("\(time) / \(duration)", in: Rect(0.35, 0.51, 0.19, 0.39),
-                            size: 23, white: 0.80, centered: true)
-            }
-        }
-        if let transport = panel.transport {
-            output.quad(panel.placement, PanelUI.transport, .texture(transport), offset: 0.002)
-        }
-        let seek = PanelUI.seek
-        let y = seek.origin.y + seek.size.y * 0.55
-        output.quad(panel.placement, Rect(seek.origin.x, y, seek.size.x, 0.012),
-                    .fill([0.35, 0.35, 0.35, 1]), offset: 0.003)
+        let ui = panel.ui
+        let time = clockText(playback.time), duration = clockText(playback.duration)
+        output.quad(panel.placement, ui.transport.normalized(in: ui.size), .fill(PanelUI.background), offset: 0.002)
+        drawButtons(ui.playbackButtons(playback, video: video, panorama: panorama), on: panel, output: &output)
+        drawLabel("\(time) / \(duration)", slot: .playbackTime, in: ui.playbackTime, on: panel,
+                  size: 22, white: 0.80, centered: true, output: &output)
+
+        let seek = ui.seek
+        let y = seek.origin.y + seek.size.y * 0.5
+        let track = Rect(seek.origin.x, y - 0.003, seek.size.x, 0.006)
+        output.quad(panel.placement, track.normalized(in: ui.size), .fill([0.35, 0.35, 0.35, 1]), offset: 0.003)
         guard playback.duration > 0 else { return }
         let progress = Float(clamp(playback.time / playback.duration, 0, 1)) * seek.size.x
-        output.quad(panel.placement, Rect(seek.origin.x, y, progress, 0.012),
-                    .fill([0.82, 0.82, 0.82, 1]), offset: 0.0032)
+        let elapsed = Rect(seek.origin.x, track.origin.y, progress, track.size.y)
+        output.quad(panel.placement, elapsed.normalized(in: ui.size), .fill([0.82, 0.82, 0.82, 1]), offset: 0.0032)
         for marker in [playback.loopStart > 0 ? playback.loopStart : nil, playback.loopEnd].compactMap({ $0 }) {
             let x = seek.origin.x + seek.size.x * Float(clamp(marker / playback.duration, 0, 1))
-            output.quad(panel.placement, Rect(x - 0.002, y - 0.012, 0.004, 0.036),
-                        .fill([0.78, 0.85, 0.97, 1]), offset: 0.0035)
+            let mark = Rect(x - 0.002, y - 0.012, 0.004, 0.024)
+            output.quad(panel.placement, mark.normalized(in: ui.size), .fill([0.78, 0.85, 0.97, 1]), offset: 0.0035)
         }
     }
 

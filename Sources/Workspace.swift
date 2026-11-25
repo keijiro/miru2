@@ -93,9 +93,6 @@ final class Workspace {
         case nil: break
         }
         for (pointer, hand) in zip(pointers, hands) { update(pointer, with: hand, at: hostTime, delta: delta) }
-        for pointer in pointers {
-            pointer.hit = pointer.ray.flatMap(pick)
-        }
         var updatedFrames = 0
         var canStartThumbnail = !panels.contains { $0.hasThumbnailJob }
         for panel in panels {
@@ -105,6 +102,9 @@ final class Workspace {
             }
             if panel.placement.size != size { dirty = true }
             if panel.browser, panel.hasThumbnailJob { canStartThumbnail = false }
+        }
+        for pointer in pointers {
+            pointer.hit = pointer.ray.flatMap(pick)
         }
         if dirty { save() }
         return updatedFrames
@@ -146,12 +146,13 @@ final class Workspace {
                 var placement = state.placement
                 placement.center = origin.position + rotation.act(placement.center)
                 placement.yaw += origin.yaw
-                placement.size = [clamp(placement.size.x, 0.24, 6), clamp(placement.size.y, 0.16, 6)]
+                placement.size = simd_clamp(placement.size, PanelUI.mediaMinimum, [6, 6])
                 let panel = Panel(placement: placement, directory: directory, root: root, device: device)
                 if let url = state.media, url.isFileURL, isInside(url.resolvingSymlinksInPath(), root: root),
                    FileManager.default.fileExists(atPath: url.path), let kind = MediaKind(url: url) {
                     panel.open(MediaEntry(url: url, kind: kind), state: state, fit: false)
                 } else {
+                    panel.placement.size = simd_max(placement.size, PanelUI.browserMinimum)
                     panel.browse(directory)
                 }
                 indexedPanels[index] = panel
@@ -169,7 +170,7 @@ final class Workspace {
         let columns = min(initial.count, Int(ceil(sqrt(Double(initial.count) * 1.6))))
         let rows = (initial.count + columns - 1) / columns
         let width = min(1, 4.4 / Float(columns))
-        let height: Float = width * 0.58
+        let height = max(PanelUI.mediaMinimum.y, width * 0.58)
         for (index, url) in initial.enumerated() {
             guard let kind = MediaKind(url: url) else { continue }
             let row = index / columns
@@ -235,7 +236,7 @@ final class Workspace {
     func showsHeader(_ panel: Panel) -> Bool {
         panel.browser || panel.controls || pointers.contains { pointer in
             guard let hit = pointer.hit, hit.panel === panel else { return false }
-            return hit.uv.y < 0.16
+            return hit.uv.y * panel.placement.size.y < panel.ui.header.size.y + 0.014
         }
     }
 
@@ -326,11 +327,16 @@ final class Workspace {
             let uv = hit.uv
             let edge = Vec2(repeating: 0.022) / panel.placement.size
             guard uv.x >= -edge.x, uv.x <= 1 + edge.x, uv.y >= -edge.y, uv.y <= 1 + edge.y else { continue }
+            let ui = panel.ui
+            let point = uv * ui.size
+            let visible = panel.visibleEntries
             let action: PanelAction?
-            if let button = panel.buttons(root: root, transportVisible: panel.controls, panorama: panorama === panel)
-                .first(where: { $0.rect.contains(uv) }) {
+            if let button = panel.buttons(panorama: panorama === panel)
+                .first(where: { $0.rect.contains(point) }) {
                 action = button.action
-            } else if panel.controls, PanelUI.seek.contains(uv), panel.playback != nil {
+            } else if panel.browser, let card = ui.cardIndex(at: point), card < visible.count {
+                action = .entry(visible.startIndex + card)
+            } else if panel.controls, ui.seek.contains(point), panel.playback != nil {
                 action = .seek
             } else {
                 let side: Vec2 = [
@@ -364,9 +370,8 @@ final class Workspace {
             if panorama === panel { panorama = nil }
             panel.browse(panel.directory)
         case .entry(let index):
-            let absolute = index + panel.page * PanelUI.pageSize
-            guard panel.entries.indices.contains(absolute) else { return }
-            let entry = panel.entries[absolute]
+            guard panel.visibleEntries.indices.contains(index) else { return }
+            let entry = panel.entries[index]
             let resolved = entry.url.resolvingSymlinksInPath()
             guard isInside(resolved, root: root) else { return }
             if entry.kind == .folder { panel.browse(resolved) }
@@ -404,7 +409,9 @@ final class Workspace {
 
     private func seek(_ panel: Panel, at u: Float, precise: Bool) {
         guard let playback = panel.playback else { return }
-        let time = Double(clamp((u - PanelUI.seek.origin.x) / PanelUI.seek.size.x, 0, 1)) * playback.duration
+        let seek = panel.ui.seek
+        let x = u * panel.placement.size.x
+        let time = Double(clamp((x - seek.origin.x) / seek.size.x, 0, 1)) * playback.duration
         if precise || abs(playback.time - time) > 0.15 { playback.seek(time, precise: precise) }
     }
 
@@ -420,7 +427,7 @@ final class Workspace {
             guard let intersection = grab.initial.hit(ray) else { return }
             let diff = ray.point(at: intersection.distance) - grab.point
             let local = Vec2(simd_dot(diff, grab.initial.right), diff.y)
-            let size = simd_clamp(grab.initial.size + side * local, [0.24, 0.16], [6, 6])
+            let size = simd_clamp(grab.initial.size + side * local, panel.minimumSize, [6, 6])
             let offset = side * (size - grab.initial.size) * 0.5
             panel.placement.center = grab.initial.center + grab.initial.right * offset.x + Vec3(0, offset.y, 0)
             panel.placement.size = size

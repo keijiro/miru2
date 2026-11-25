@@ -16,35 +16,122 @@ struct Button {
     var active = false
 }
 
-enum PanelUI {
-    static let header = Rect(0, 0, 1, 0.14)
-    static let transport = Rect(0, 0.72, 1, 0.28)
-    static let seek = Rect(0.045, 0.745, 0.91, 0.095)
-    static let back = Button(action: .back, rect: Rect(0.025, 0.025, 0.13, 0.09), label: "Back")
-    static let close = Button(action: .close, rect: Rect(0.85, 0.025, 0.125, 0.09), label: "Close")
-    static let exit = Button(action: .exit, rect: Rect(0.71, 0.025, 0.125, 0.09), label: "Exit VR")
-    static let up = Button(action: .up, rect: Rect(0.025, 0.025, 0.13, 0.09), label: "Up")
-    static let previous = Button(action: .previous, rect: Rect(0.61, 0.88, 0.17, 0.085), label: "Previous")
-    static let next = Button(action: .next, rect: Rect(0.8, 0.88, 0.175, 0.085), label: "Next")
-    static let pageSize = 6
+// Layout dimensions use meters in panel-local coordinates, measured from the top left.
+struct PanelUI {
+    static let browserMinimum: Vec2 = [0.36, 0.415]
+    static let mediaMinimum: Vec2 = [0.32, 0.26]
+    static let cardSize: Vec2 = [0.307, 0.2145]
+    static let margin: Float = 0.025
+    static let background: Vec4 = [0.14, 0.14, 0.14, 1]
 
-    static func card(_ index: Int) -> Rect {
-        Rect(0.025 + Float(index % 3) * 0.321, 0.17 + Float(index / 3) * 0.345, 0.307, 0.325)
+    private static let cardStep = cardSize + Vec2(0.014, 0.0132)
+    private static let gridTop: Float = 0.112
+    private static let footerHeight: Float = 0.068
+
+    let size: Vec2
+
+    var columns: Int {
+        1 + Int(max(0, size.x - 2 * Self.margin - Self.cardSize.x) / Self.cardStep.x)
     }
 
-    static func playbackButtons(_ playback: Playback, video: Bool, panorama: Bool) -> [Button] {
+    var pageSize: Int {
+        let room = size.y - Self.gridTop - Self.footerHeight - Self.cardSize.y
+        return columns * (1 + Int(max(0, room) / Self.cardStep.y))
+    }
+
+    func card(_ index: Int) -> Rect {
+        Rect(Self.margin + Float(index % columns) * Self.cardStep.x,
+             Self.gridTop + Float(index / columns) * Self.cardStep.y, Self.cardSize.x, Self.cardSize.y)
+    }
+
+    func cardIndex(at point: Vec2) -> Int? {
+        let origin = Vec2(Self.margin, Self.gridTop)
+        guard point.x >= origin.x, point.y >= origin.y else { return nil }
+        let cell = (point - origin) / Self.cardStep
+        let column = Int(cell.x), row = Int(cell.y)
+        guard column < columns else { return nil }
+        let index = row * columns + column
+        return index < pageSize && card(index).contains(point) ? index : nil
+    }
+
+    var header: Rect { Rect(0, 0, size.x, 0.092) }
+    var divider: Rect { Rect(Self.margin, 0.089, size.x - 2 * Self.margin, 0.0015) }
+    var back: Button {
+        Button(action: .back, rect: Rect(Self.margin, 0.017, 0.12, 0.058), label: "Back")
+    }
+    var up: Button {
+        Button(action: .up, rect: Rect(Self.margin, 0.017, 0.08, 0.058), label: "Up")
+    }
+    var close: Button {
+        Button(action: .close, rect: Rect(size.x - Self.margin - 0.12, 0.017, 0.12, 0.058), label: "Close")
+    }
+    var exit: Button {
+        Button(action: .exit, rect: Rect(close.rect.origin.x - 0.118, 0.017, 0.108, 0.058), label: "Exit VR")
+    }
+
+    func title(browser: Bool, atRoot: Bool) -> Rect {
+        let left = browser ? (atRoot ? Self.margin : up.rect.origin.x + up.rect.size.x + 0.012)
+                           : back.rect.origin.x + back.rect.size.x + 0.012
+        let right = (browser ? exit : close).rect.origin.x - 0.012
+        return Rect(left, 0.017, max(0, right - left), 0.058)
+    }
+
+    var next: Button {
+        Button(action: .next, rect: Rect(size.x - Self.margin - 0.105, size.y - 0.061, 0.105, 0.043), label: "Next")
+    }
+    var previous: Button {
+        Button(action: .previous, rect: Rect(next.rect.origin.x - 0.122, size.y - 0.061, 0.112, 0.043),
+               label: "Previous")
+    }
+    var pageNumber: Rect {
+        Rect(Self.margin, next.rect.origin.y, previous.rect.origin.x - Self.margin - 0.008, next.rect.size.y)
+    }
+    var message: Rect {
+        Rect(Self.margin, (size.y - 0.06) / 2, size.x - 2 * Self.margin, 0.06)
+    }
+
+    private var compactTransport: Bool { size.x < 0.53 }
+    var transport: Rect {
+        let height: Float = compactTransport ? 0.162 : 0.107
+        return Rect(0, size.y - height, size.x, height)
+    }
+    var seek: Rect {
+        Rect(Self.margin, transport.origin.y + 0.008, size.x - 2 * Self.margin - 0.161, 0.035)
+    }
+    var playbackTime: Rect {
+        Rect(size.x - Self.margin - 0.15, seek.origin.y, 0.15, seek.size.y)
+    }
+
+    func playbackButtons(_ playback: Playback, video: Bool, panorama: Bool) -> [Button] {
+        let firstRow = transport.origin.y + 0.046
+        let secondRow = compactTransport ? firstRow + 0.055 : firstRow
+        let loopX: Float = compactTransport ? Self.margin : Self.margin + 0.24
         var buttons = [
-            Button(action: .play, rect: Rect(0.025, 0.865, 0.14, 0.105), label: playback.paused ? "Play" : "Pause"),
-            Button(action: .mute, rect: Rect(0.18, 0.865, 0.16, 0.105), label: playback.muted ? "Unmute" : "Mute"),
-            Button(action: .loopStart, rect: Rect(0.55, 0.865, 0.105, 0.105), label: "A", active: playback.loopStart > 0),
-            Button(action: .loopEnd, rect: Rect(0.67, 0.865, 0.105, 0.105), label: "B", active: playback.loopEnd != nil)
+            Button(action: .play, rect: Rect(Self.margin, firstRow, 0.105, 0.05),
+                   label: playback.paused ? "Play" : "Pause"),
+            Button(action: .mute, rect: Rect(Self.margin + 0.115, firstRow, 0.115, 0.05),
+                   label: playback.muted ? "Unmute" : "Mute"),
+            Button(action: .loopStart, rect: Rect(loopX, secondRow, 0.045, 0.05),
+                   label: "A", active: playback.loopStart > 0),
+            Button(action: .loopEnd, rect: Rect(loopX + 0.055, secondRow, 0.045, 0.05),
+                   label: "B", active: playback.loopEnd != nil)
         ]
         if video {
-            buttons.append(Button(action: .panorama, rect: Rect(0.79, 0.865, 0.185, 0.105),
+            buttons.append(Button(action: .panorama, rect: Rect(loopX + 0.11, secondRow, 0.125, 0.05),
                                   label: "180° SBS", active: panorama))
         }
         return buttons
     }
+}
+
+enum PanelLabel {
+    case title, message, pageNumber, playbackTime
+}
+
+struct LabelTexture {
+    let value: String
+    let pixels: SIMD2<Int>
+    let texture: MTLTexture
 }
 
 func makeTexture(
@@ -70,12 +157,15 @@ struct Canvas {
     private let context: CGContext
     private let width: CGFloat
     private let height: CGFloat
-    static let background: CGFloat = 0.14
+    static func pixels(for size: Vec2) -> SIMD2<Int> {
+        SIMD2(Int((size.x * 960).rounded()), Int((size.y * 960).rounded()))
+    }
 
     static func texture(
-        device: MTLDevice, width: Int = 960, height: Int = 620, draw: (Canvas) -> Void
+        device: MTLDevice, pixels: SIMD2<Int>, draw: (Canvas) -> Void
     ) -> MTLTexture? {
-        makeTexture(width: width, height: height, device: device) { context in
+        let width = pixels.x, height = pixels.y
+        return makeTexture(width: width, height: height, device: device) { context in
             draw(Canvas(context: context, width: CGFloat(width), height: CGFloat(height)))
         }
     }
@@ -117,14 +207,6 @@ struct Canvas {
                                        y: box.midY - (CTFontGetAscent(font) - CTFontGetDescent(font)) / 2)
         CTLineDraw(displayed, context)
         context.restoreGState()
-    }
-
-    func button(_ button: Button, relativeTo parent: Rect = .full) {
-        let rect = Rect((button.rect.origin.x - parent.origin.x) / parent.size.x,
-                        (button.rect.origin.y - parent.origin.y) / parent.size.y,
-                        button.rect.size.x / parent.size.x, button.rect.size.y / parent.size.y)
-        fill(rect, white: button.active ? 0.38 : 0.22, rounded: true)
-        text(button.label, in: rect, size: 25, centered: true)
     }
 
     func thumbnail(_ image: CGImage, in rect: Rect) {
