@@ -283,12 +283,8 @@ final class Renderer {
         guard let entry = panel.entry else { return }
         let ui = panel.ui
         let playback = panel.playback
-        if let frame = playback?.frame, let playback {
-            if isPanorama {
-                output.outline(.full, on: panel.placement, color: [0.93, 0.93, 0.93, 0.35])
-            } else {
-                output.quad(panel.placement, .full, .video(frame, playback.videoUV.cropped(to: panel.mediaCrop)))
-            }
+        if !isPanorama, let playback, let frame = playback.frame {
+            output.quad(panel.placement, .full, .video(frame, playback.videoUV.cropped(to: panel.mediaCrop)))
         } else if let texture = panel.image {
             output.quad(panel.placement, .full, .fill([0.07, 0.07, 0.07, 1]))
             output.quad(panel.placement, .full, .texture(texture, panel.mediaCrop), offset: 0.0005)
@@ -296,7 +292,7 @@ final class Renderer {
             let status: String
             if playback?.failed == true || panel.imageFailed { status = "Could not open this file" }
             else if playback?.videoUnavailable == true { status = "Could not decode video" }
-            else if entry.kind == .audio { status = entry.name }
+            else if isPanorama || entry.kind == .audio { status = entry.name }
             else { status = "Loading…" }
             output.quad(panel.placement, .full, .fill(PanelUI.background))
             drawLabel(status, slot: .message, in: ui.message, on: panel, size: 29, centered: true, output: &output)
