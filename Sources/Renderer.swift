@@ -226,7 +226,7 @@ final class Renderer {
     private func prepareBrowser(_ panel: Panel, root: URL, output: inout RenderFrame) {
         let ui = panel.ui
         output.quad(panel.placement, .full, .fill(PanelUI.background))
-        drawButtons([ui.close, ui.exit], on: panel, output: &output)
+        drawButtons([ui.close], on: panel, output: &output)
         let atRoot = panel.directory == root
         let path = atRoot ? root.lastPathComponent :
             panel.directory.pathComponents.dropFirst(root.pathComponents.count).joined(separator: " / ")

@@ -43,7 +43,8 @@ In the Simulator, select **Search for Server**, then **Connect**. Click the stre
 | Drag inside an image or video | Pan the cropped media |
 | Select the hemisphere icon in the playback controls | Toggle a 180° equirectangular side-by-side video as the background, with the left eye first |
 | Point at the upper-left corner inside a media window or near its edges | Reveal **← Back** and the window handles. Select **← Back** to return to the browser, where **Close** closes the window |
-| Select **Exit VR** in the file browser | End the session. You can also press `Ctrl+C` in the terminal. |
+
+Press `Ctrl+C` in the terminal to end the session.
 
 ## Video rendering and performance
 

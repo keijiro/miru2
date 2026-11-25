@@ -434,7 +434,7 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
         }
 
         let timeLimitReached = firstFrameTime.flatMap { start in options.seconds.map { CACurrentMediaTime() - start >= $0 } } ?? false
-        if (stop.withLock({ $0 }) || workspace.wantsExit || timeLimitReached) && !exitRequested {
+        if (stop.withLock({ $0 }) || timeLimitReached) && !exitRequested {
             if !running { return }
             try check(xrRequestExitSession(session), "xrRequestExitSession")
             exitRequested = true

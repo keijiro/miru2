@@ -4,7 +4,7 @@ import Foundation
 import Metal
 
 enum PanelAction: Equatable {
-    case back, close, exit, scroll, entry(Int)
+    case back, close, scroll, entry(Int)
     case media, play, mute, loopStart, loopEnd, panorama, seek
     case move(Vec2), resize(Vec2)
 }
@@ -93,12 +93,8 @@ struct PanelUI {
     var close: Button {
         Button(action: .close, rect: Rect(size.x - Self.margin - 0.12, 0.017, 0.12, 0.058), label: "Close")
     }
-    var exit: Button {
-        Button(action: .exit, rect: Rect(close.rect.origin.x - 0.118, 0.017, 0.108, 0.058), label: "Exit VR")
-    }
-
     var title: Rect {
-        Rect(Self.margin, 0.017, max(0, exit.rect.origin.x - Self.margin - 0.012), 0.058)
+        Rect(Self.margin, 0.017, max(0, close.rect.origin.x - Self.margin - 0.012), 0.058)
     }
 
     var message: Rect {

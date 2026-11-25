@@ -51,7 +51,6 @@ final class Workspace {
     private(set) var panels: [Panel] = []
     private(set) var panorama: Panel?
     private(set) var panoramaYaw: Float = 0
-    private(set) var wantsExit = false
     private var anchor: (position: Vec3, yaw: Float)?
     private let pointers = [Pointer(), Pointer()]
     private var head = XrPosef()
@@ -353,8 +352,8 @@ final class Workspace {
                     let buttons = ui.playbackButtons(playback, video: panel.canShowPanorama, panorama: panorama === panel)
                     action = ui.seek.contains(point) ? .seek : buttons.first { $0.rect.contains(point) }?.action
                 } else if inBody {
-                    if panel.browser, let button = [ui.close, ui.exit].first(where: { $0.rect.contains(point) }) {
-                        action = button.action
+                    if panel.browser, ui.close.rect.contains(point) {
+                        action = .close
                     } else if panel.browser, ui.viewport.contains(point) {
                         if let index = ui.cardIndex(at: point, offset: panel.scrollOffset), panel.entries.indices.contains(index) {
                             action = .entry(index)
@@ -389,7 +388,6 @@ final class Workspace {
         case .close:
             if panorama === panel { panorama = nil }
             panels.removeAll { $0 === panel }
-        case .exit: wantsExit = true
         case .back:
             if panorama === panel { panorama = nil }
             panel.browse(panel.directory, offset: panel.scrollOffset)
