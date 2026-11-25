@@ -197,6 +197,7 @@ final class Renderer {
         } else {
             let status: String
             if playback?.failed == true || panel.imageFailed { status = "Could not open this file" }
+            else if playback?.videoUnavailable == true { status = "Could not decode video" }
             else if entry.kind == .audio { status = entry.name }
             else { status = "Loading…" }
             let key = "status:\(panel.revision):\(status)"

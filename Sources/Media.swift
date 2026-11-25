@@ -98,13 +98,45 @@ private func decodeImage(_ url: URL, maximumSize: Int) -> CGImage? {
 
 func loadThumbnail(_ entry: MediaEntry) async -> CGImage? {
     if entry.kind == .image { return decodeImage(entry.url, maximumSize: 256) }
-    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: entry.url))
+    let video = await VideoAsset.load(entry.url)
+    guard !Task.isCancelled, !video.unavailable else { return nil }
+    defer { withExtendedLifetime(video) {} }
+    let generator = AVAssetImageGenerator(asset: video.asset)
     generator.appliesPreferredTrackTransform = true
     generator.maximumSize = CGSize(width: 256, height: 144)
     return try? await withTaskCancellationHandler {
         try await generator.image(at: .zero).image
     } onCancel: {
         generator.cancelAllCGImageGeneration()
+    }
+}
+
+private struct VideoAsset {
+    let asset: AVURLAsset
+    let track: AVAssetTrack?
+    let unavailable: Bool
+    // AVAssetResourceLoader holds its delegate weakly.
+    private var resource: HEVCResource?
+
+    static func load(_ url: URL) async -> VideoAsset {
+        let asset = AVURLAsset(url: url)
+        guard let tracks = try? await asset.loadTracks(withMediaType: .video) else {
+            return VideoAsset(asset: asset, track: nil, unavailable: false)
+        }
+        guard let track = tracks.first else {
+            return VideoAsset(asset: asset, track: nil, unavailable: true)
+        }
+        guard tracks.count == 1, (try? await track.load(.isDecodable)) == false else {
+            return VideoAsset(asset: asset, track: track, unavailable: false)
+        }
+        if !Task.isCancelled, let resource = try? HEVCResource(url: url) {
+            let compatible = resource.makeAsset()
+            if let tracks = try? await compatible.loadTracks(withMediaType: .video),
+               let track = tracks.first, (try? await track.load(.isDecodable)) == true {
+                return VideoAsset(asset: compatible, track: track, unavailable: false, resource: resource)
+            }
+        }
+        return VideoAsset(asset: asset, track: track, unavailable: true)
     }
 }
 
@@ -188,17 +220,18 @@ final class VideoFrame {
 }
 
 final class Playback {
-    private let player: AVPlayer
-    private let item: AVPlayerItem
-    private let output: AVPlayerItemVideoOutput?
-    private let transform = MediaLoad<VideoUV>()
-    private var transformTask: Task<Void, Never>?
+    private let player = AVPlayer()
+    private var output: AVPlayerItemVideoOutput?
+    private var videoAsset: VideoAsset?
+    private var videoLoad: MediaLoad<(VideoAsset, VideoUV)>?
+    private var videoTask: Task<Void, Never>?
     private var pendingSeek: MediaLoad<Bool>?
     private var seekTarget: Double?
     private(set) var frame: VideoFrame?
     private(set) var videoUV = VideoUV()
     private(set) var time = 0.0
     private(set) var failed = false
+    var videoUnavailable: Bool { videoAsset?.unavailable == true }
     private(set) var duration = 0.0
     private(set) var aspect: Float?
     private(set) var paused: Bool
@@ -212,9 +245,34 @@ final class Playback {
         self.paused = paused
         self.loopStart = loopStart
         self.loopEnd = loopEnd
-        let asset = AVURLAsset(url: entry.url)
-        item = AVPlayerItem(asset: asset)
+        player.actionAtItemEnd = .pause
+        player.isMuted = muted
         if entry.kind == .video {
+            let result = MediaLoad<(VideoAsset, VideoUV)>()
+            videoLoad = result
+            videoTask = Task {
+                let video = await VideoAsset.load(entry.url)
+                var uv = VideoUV()
+                if let track = video.track, let (size, orientation) = try? await track.load(.naturalSize, .preferredTransform) {
+                    uv = VideoUV(size: size, transform: orientation)
+                }
+                if !Task.isCancelled { result.complete((video, uv)) }
+            }
+        } else {
+            start(AVPlayerItem(url: entry.url))
+        }
+    }
+
+    private func start(_ item: AVPlayerItem) {
+        player.replaceCurrentItem(with: item)
+        if !paused && loopStart == 0 { player.play() }
+    }
+
+    private func startVideo(_ video: VideoAsset, uv: VideoUV) {
+        videoAsset = video
+        videoUV = uv
+        let item = AVPlayerItem(asset: video.asset)
+        if !video.unavailable {
             let attributes: [String: Any] = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
                 kCVPixelBufferMetalCompatibilityKey as String: true,
@@ -224,26 +282,14 @@ final class Playback {
             output.suppressesPlayerRendering = true
             item.add(output)
             self.output = output
-            let result = transform
-            transformTask = Task {
-                guard let tracks = try? await asset.loadTracks(withMediaType: .video),
-                      let track = tracks.first,
-                      let (size, orientation) = try? await track.load(.naturalSize, .preferredTransform) else { return }
-                result.complete(VideoUV(size: size, transform: orientation))
-            }
-        } else {
-            output = nil
         }
-        player = AVPlayer(playerItem: item)
-        player.actionAtItemEnd = .pause
-        player.isMuted = muted
-        if !paused && loopStart == 0 { player.play() }
+        start(item)
     }
 
     deinit {
-        transformTask?.cancel()
+        videoTask?.cancel()
         player.pause()
-        item.cancelPendingSeeks()
+        player.currentItem?.cancelPendingSeeks()
     }
 
     func togglePaused() {
@@ -272,7 +318,12 @@ final class Playback {
 
     // Called once per stereo frame, before either eye is encoded.
     func update(hostTime: Double, cache: CVMetalTextureCache) -> Bool {
-        if let newTransform = transform.take() { videoUV = newTransform }
+        if let (video, uv) = videoLoad?.take() {
+            videoLoad = nil
+            videoTask = nil
+            startVideo(video, uv: uv)
+        }
+        guard let item = player.currentItem else { return false }
         if item.status == .failed || player.status == .failed {
             if !failed { print("Playback failed: \(item.error?.localizedDescription ?? player.error?.localizedDescription ?? "unknown error")") }
             failed = true
