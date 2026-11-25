@@ -82,12 +82,16 @@ final class Workspace {
         }
     }
 
-    func update(views: [XrView], hands: [Hand], menu: Bool, hostTime: Double, delta: Float) -> Int {
+    func update(views: [XrView], hands: [Hand], menu: MenuCommand?, hostTime: Double, delta: Float) -> Int {
         head = views[0].pose
         let center = (views[0].pose.position.vector + views[1].pose.position.vector) * 0.5
         head.position = XrVector3f(x: center.x, y: center.y, z: center.z)
         if anchor == nil { initialize() }
-        if menu { openBrowser(inFrontOf: head) }
+        switch menu {
+        case .openBrowser: openBrowser(inFrontOf: head)
+        case .recenter: recenter()
+        case nil: break
+        }
         for (pointer, hand) in zip(pointers, hands) { update(pointer, with: hand, at: hostTime, delta: delta) }
         for pointer in pointers {
             pointer.hit = pointer.ray.flatMap(pick)
@@ -104,6 +108,28 @@ final class Workspace {
         }
         if dirty { save() }
         return updatedFrames
+    }
+
+    private func recenter() {
+        guard let anchor else { return }
+        let origin = (position: head.position.vector, yaw: head.heading)
+        let yaw = origin.yaw - anchor.yaw
+        let rotation = simd_quatf(angle: yaw, axis: [0, 1, 0])
+        for panel in panels {
+            panel.placement.center = origin.position + rotation.act(panel.placement.center - anchor.position)
+            panel.placement.yaw += yaw
+        }
+        if panorama != nil { panoramaYaw = origin.yaw }
+        self.anchor = origin
+
+        for pointer in pointers {
+            pointer.grab = nil
+            pointer.emptyPress = nil
+            pointer.preview = nil
+            pointer.acceptsPress = false
+        }
+        dirty = true
+        if diagnostics { print("Recentered the workspace.") }
     }
 
     private func initialize() {

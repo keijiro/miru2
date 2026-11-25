@@ -26,14 +26,15 @@ With no `--library` argument, miru opens `../miru/samples` if it exists and othe
 
 You can reuse an existing `oxrsys-test` build of the same revision with `MIRU_OXRSYS_BUILD=../oxrsys-test/.build ./build.sh --simulator`.
 
-In the Simulator, select **Search for Server**, then **Connect**. Click the streamed view to focus keyboard input. **F** and **G** act as the left and right triggers, **Esc** opens a file browser, and the arrow keys turn your view. Passthrough areas appear as a dark background in the Simulator.
+In the Simulator, select **Search for Server**, then **Connect**. Click the streamed view to focus keyboard input. **F** and **G** act as the left and right triggers, and the arrow keys turn your view. Tap **Esc** to open a file browser or hold it to recenter the workspace. Passthrough areas appear as a dark background in the Simulator.
 
 ## VR controls
 
 | Control | Action |
 | --- | --- |
 | Hold the trigger in empty space for half a second | Open a file browser |
-| Press the controller menu button | Open a file browser in front of you |
+| Tap the left controller's menu button | Open a file browser in front of you |
+| Hold the left controller's menu button for half a second | Recenter the workspace and 180° video to face your current direction |
 | Drag a window edge or corner | Move or resize the window |
 | Move the thumbstick up or down while dragging a window edge | Adjust the window’s distance |
 | Tap a video or audio window | Show or hide playback, mute, seek, and A/B loop controls |

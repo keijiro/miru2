@@ -59,6 +59,36 @@ struct Hand {
     var stick: Float = 0
 }
 
+enum MenuCommand {
+    case openBrowser, recenter
+}
+
+private struct MenuButton {
+    private var ready = false
+    private var pressedAt: Double?
+    private var command: MenuCommand?
+
+    mutating func update(pressed: Bool?, at time: Double) {
+        guard let pressed else {
+            self = MenuButton()
+            return
+        }
+        if pressed && ready { pressedAt = time }
+        ready = !pressed
+        guard let pressedAt else { return }
+        let held = time - pressedAt >= 0.5
+        if held || !pressed {
+            command = held ? .recenter : .openBrowser
+            self.pressedAt = nil
+        }
+    }
+
+    mutating func takeCommand() -> MenuCommand? {
+        defer { command = nil }
+        return command
+    }
+}
+
 private func actionValue(_ session: XrSession, _ action: XrAction, _ path: XrPath) throws -> Float {
     var info = XrActionStateGetInfo(type: XR_TYPE_ACTION_STATE_GET_INFO, next: nil, action: action, subactionPath: path)
     var state = XrActionStateFloat()
@@ -330,8 +360,8 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
 
     print("Metal device: \(device.name). OpenXR alpha blend enabled.")
     print("Media library: \(options.root.path)")
-    print(options.simulator ? "Simulator: hold F/G or press Esc to open a browser." :
-        "Hold a trigger in empty space for 0.5 seconds to open a browser.")
+    print(options.simulator ? "Simulator: hold F/G or tap Esc to open a browser. Hold Esc to recenter." :
+        "Hold a trigger in empty space for 0.5 seconds to open a browser. Hold the left menu button to recenter.")
 
     var running = false
     var exitRequested = false
@@ -340,6 +370,7 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
     var submittedFrames = 0
     var focused = false
     var hadHands = false
+    var menuButton = MenuButton()
 
     while true {
         var event = XrEventDataBuffer()
@@ -356,6 +387,7 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
                     UnsafeRawPointer($0).load(as: XrEventDataSessionStateChanged.self).state
                 }
                 focused = state == XR_SESSION_STATE_FOCUSED
+                if !focused { menuButton = MenuButton() }
                 switch state {
                 case XR_SESSION_STATE_READY:
                     var begin = XrSessionBeginInfo(type: XR_TYPE_SESSION_BEGIN_INFO, next: nil, primaryViewConfigurationType: stereo)
@@ -392,7 +424,7 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
 
         try autoreleasepool {
             var hands = [Hand(), Hand()]
-            var menuPressed = false
+            var menuPressed: Bool?
             var wait = XrFrameWaitInfo(type: XR_TYPE_FRAME_WAIT_INFO, next: nil)
             var frame = XrFrameState()
             frame.type = XR_TYPE_FRAME_STATE
@@ -419,9 +451,10 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
                     var menu = XrActionStateBoolean()
                     menu.type = XR_TYPE_ACTION_STATE_BOOLEAN
                     try check(xrGetActionStateBoolean(session, &info, &menu), "xrGetActionStateBoolean")
-                    menuPressed = menu.isActive != 0 && menu.changedSinceLastSync != 0 && menu.currentState != 0
+                    if menu.isActive != 0 { menuPressed = menu.currentState != 0 }
                 }
             }
+            menuButton.update(pressed: menuPressed, at: CACurrentMediaTime())
 
             var begin = XrFrameBeginInfo(type: XR_TYPE_FRAME_BEGIN_INFO, next: nil)
             try check(xrBeginFrame(session, &begin), "xrBeginFrame")
@@ -441,7 +474,7 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
                 previousFrameTime = started
                 let didRender = try renderFrame(
                     session: session, origin: origin, end: end, eyes: eyes, renderer: renderer, queue: queue,
-                    workspace: workspace, hands: hands, menu: menuPressed, started: started, delta: delta,
+                    workspace: workspace, hands: hands, menu: &menuButton, started: started, delta: delta,
                     frames: frames, metrics: metrics
                 )
                 if let (result, updates) = didRender {
@@ -467,7 +500,7 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
 
 private func renderFrame(
     session: XrSession, origin: XrSpace, end: XrFrameEndInfo, eyes: [Eye], renderer: Renderer,
-    queue: MTLCommandQueue, workspace: Workspace, hands: [Hand], menu: Bool, started: Double, delta: Float,
+    queue: MTLCommandQueue, workspace: Workspace, hands: [Hand], menu: inout MenuButton, started: Double, delta: Float,
     frames: SubmittedFrames, metrics: FrameMetrics?
 ) throws -> (XrResult, Int)? {
     var locate = XrViewLocateInfo(
@@ -483,7 +516,7 @@ private func renderFrame(
     guard count == views.count, viewState.viewStateFlags & validViews == validViews else { return nil }
 
     try frames.makeRoom()
-    let updated = workspace.update(views: views, hands: hands, menu: menu, hostTime: started, delta: delta)
+    let updated = workspace.update(views: views, hands: hands, menu: menu.takeCommand(), hostTime: started, delta: delta)
     let rendered = renderer.prepare(workspace)
     guard let command = queue.makeCommandBuffer() else { throw MiruError("Could not create a Metal command buffer") }
     try eyes[0].withImage { leftImage in
