@@ -111,10 +111,12 @@ private func locateHand(
 private final class Eye {
     let swapchain: XrSwapchain
     let rect: XrRect2Di
+    let multisampleColor: MTLTexture?
     let depth: MTLTexture
     private let images: [MTLTexture]
 
-    init(session: XrSession, device: MTLDevice, format: MTLPixelFormat, config: XrViewConfigurationView) throws {
+    init(session: XrSession, device: MTLDevice, format: MTLPixelFormat, config: XrViewConfigurationView,
+         sampleCount: Int) throws {
         let width = config.recommendedImageRectWidth
         let height = config.recommendedImageRectHeight
         var info = XrSwapchainCreateInfo(
@@ -150,12 +152,25 @@ private final class Eye {
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(
                 pixelFormat: .depth32Float, width: Int(width), height: Int(height), mipmapped: false
             )
-            descriptor.storageMode = .private
+            if sampleCount > 1 {
+                descriptor.textureType = .type2DMultisample
+                descriptor.sampleCount = sampleCount
+            }
+            descriptor.storageMode = sampleCount > 1 && device.supportsFamily(.apple7) ? .memoryless : .private
             descriptor.usage = .renderTarget
             guard let texture = device.makeTexture(descriptor: descriptor) else {
                 throw MiruError("Could not create a Metal depth texture")
             }
             depth = texture
+            if sampleCount > 1 {
+                descriptor.pixelFormat = format
+                guard let color = device.makeTexture(descriptor: descriptor) else {
+                    throw MiruError("Could not create a multisample Metal color texture")
+                }
+                multisampleColor = color
+            } else {
+                multisampleColor = nil
+            }
             rect = XrRect2Di(offset: XrOffset2Di(), extent: XrExtent2Di(width: Int32(width), height: Int32(height)))
             swapchain = handle
         } catch {
@@ -349,16 +364,19 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
         "xrEnumerateViewConfigurationViews"
     )
     guard count == configs.count else { throw MiruError("Expected two OpenXR views, got \(count)") }
-    let eyes = try configs.map { try Eye(session: session, device: device, format: format, config: $0) }
+    let sampleCount = device.supportsTextureSampleCount(4) ? 4 : 1
+    let eyes = try configs.map {
+        try Eye(session: session, device: device, format: format, config: $0, sampleCount: sampleCount)
+    }
     let shaders = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
         .appendingPathComponent("Shaders.metal")
-    let renderer = try Renderer(device: device, format: format, shaders: shaders)
+    let renderer = try Renderer(device: device, format: format, shaders: shaders, sampleCount: sampleCount)
     let workspace = try Workspace(options: options, device: device)
     let frames = SubmittedFrames()
     defer { frames.drain(); workspace.finish() }
     let metrics = options.metrics ? FrameMetrics() : nil
 
-    print("Metal device: \(device.name). OpenXR alpha blend enabled.")
+    print("Metal device: \(device.name). OpenXR alpha blend enabled. Render samples: \(sampleCount).")
     print("Media library: \(options.root.path)")
     print(options.simulator ? "Simulator: hold F/G or tap Esc to open a browser. Hold Esc to recenter." :
         "Hold a trigger in empty space for 0.5 seconds to open a browser. Hold the left menu button to recenter.")
@@ -521,8 +539,10 @@ private func renderFrame(
     guard let command = queue.makeCommandBuffer() else { throw MiruError("Could not create a Metal command buffer") }
     try eyes[0].withImage { leftImage in
         try eyes[1].withImage { rightImage in
-            try renderer.encode(rendered, into: command, color: leftImage, depth: eyes[0].depth, view: views[0], eye: 0)
-            try renderer.encode(rendered, into: command, color: rightImage, depth: eyes[1].depth, view: views[1], eye: 1)
+            try renderer.encode(rendered, into: command, color: leftImage, depth: eyes[0].depth,
+                                multisampleColor: eyes[0].multisampleColor, view: views[0], eye: 0)
+            try renderer.encode(rendered, into: command, color: rightImage, depth: eyes[1].depth,
+                                multisampleColor: eyes[1].multisampleColor, view: views[1], eye: 1)
             command.addCompletedHandler { completed in
                 withExtendedLifetime(rendered) {}
                 metrics?.recordGPU(completed.gpuEndTime - completed.gpuStartTime)

@@ -53,7 +53,7 @@ final class Renderer {
     private let depth: MTLDepthStencilState
     private let backgroundDepth: MTLDepthStencilState
 
-    init(device: MTLDevice, format: MTLPixelFormat, shaders: URL) throws {
+    init(device: MTLDevice, format: MTLPixelFormat, shaders: URL, sampleCount: Int) throws {
         self.device = device
         let library = try device.makeLibrary(source: String(contentsOf: shaders, encoding: .utf8), options: nil)
         let constants = MTLFunctionConstantValues()
@@ -65,6 +65,7 @@ final class Renderer {
             descriptor.label = fragment
             descriptor.vertexFunction = vertexShader
             descriptor.fragmentFunction = try library.makeFunction(name: fragment, constantValues: constants)
+            descriptor.rasterSampleCount = sampleCount
             descriptor.depthAttachmentPixelFormat = .depth32Float
             let color = descriptor.colorAttachments[0]!
             color.pixelFormat = format
@@ -270,11 +271,16 @@ final class Renderer {
     }
 
     func encode(_ frame: RenderFrame, into command: MTLCommandBuffer, color: MTLTexture, depth: MTLTexture,
-                view: XrView, eye: Int) throws {
+                multisampleColor: MTLTexture?, view: XrView, eye: Int) throws {
         let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = color
+        pass.colorAttachments[0].texture = multisampleColor ?? color
         pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
+        if multisampleColor != nil {
+            pass.colorAttachments[0].resolveTexture = color
+            pass.colorAttachments[0].storeAction = .multisampleResolve
+        } else {
+            pass.colorAttachments[0].storeAction = .store
+        }
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         pass.depthAttachment.texture = depth
         pass.depthAttachment.loadAction = .clear
