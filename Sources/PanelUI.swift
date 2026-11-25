@@ -18,13 +18,15 @@ struct Button {
 
 // Layout dimensions use meters in panel-local coordinates, measured from the top left.
 struct PanelUI {
-    static let browserMinimum: Vec2 = [0.36, 0.415]
-    static let mediaMinimum: Vec2 = [0.32, 0.26]
+    static let minimumSize: Vec2 = [0.32, 0.26]
     static let cardSize: Vec2 = [0.22, 0.22]
     static let margin: Float = 0.025
     static let background: Vec4 = [0.14, 0.14, 0.14, 1]
 
-    private static let cardStep = cardSize + Vec2(0.014, 0.0132)
+    private var displayedCardSize: Vec2 {
+        Vec2(repeating: min(Self.cardSize.y, size.y - Self.gridTop - Self.footerHeight))
+    }
+    private var cardStep: Vec2 { displayedCardSize + Vec2(0.014, 0.0132) }
     private static let gridTop: Float = 0.112
     private static let footerHeight: Float = 0.068
 
@@ -60,23 +62,23 @@ struct PanelUI {
     }
 
     var columns: Int {
-        1 + Int(max(0, size.x - 2 * Self.margin - Self.cardSize.x) / Self.cardStep.x)
+        1 + Int(max(0, size.x - 2 * Self.margin - displayedCardSize.x) / cardStep.x)
     }
 
     var pageSize: Int {
-        let room = size.y - Self.gridTop - Self.footerHeight - Self.cardSize.y
-        return columns * (1 + Int(max(0, room) / Self.cardStep.y))
+        let room = size.y - Self.gridTop - Self.footerHeight - displayedCardSize.y
+        return columns * (1 + Int(max(0, room) / cardStep.y))
     }
 
     func card(_ index: Int) -> Rect {
-        Rect(Self.margin + Float(index % columns) * Self.cardStep.x,
-             Self.gridTop + Float(index / columns) * Self.cardStep.y, Self.cardSize.x, Self.cardSize.y)
+        Rect(Self.margin + Float(index % columns) * cardStep.x,
+             Self.gridTop + Float(index / columns) * cardStep.y, displayedCardSize.x, displayedCardSize.y)
     }
 
     func cardIndex(at point: Vec2) -> Int? {
         let origin = Vec2(Self.margin, Self.gridTop)
         guard point.x >= origin.x, point.y >= origin.y else { return nil }
-        let cell = (point - origin) / Self.cardStep
+        let cell = (point - origin) / cardStep
         let column = Int(cell.x), row = Int(cell.y)
         guard column < columns else { return nil }
         let index = row * columns + column
@@ -89,7 +91,7 @@ struct PanelUI {
         Button(action: .back, rect: Rect(Self.margin, 0.017, 0.12, 0.058), label: "Back")
     }
     var up: Button {
-        Button(action: .up, rect: Rect(Self.margin, 0.017, 0.08, 0.058), label: "Up")
+        Button(action: .up, rect: Rect(Self.margin, 0.017, min(0.08, exit.rect.origin.x - Self.margin - 0.008), 0.058), label: "Up")
     }
     var close: Button {
         Button(action: .close, rect: Rect(size.x - Self.margin - 0.12, 0.017, 0.12, 0.058), label: "Close")

@@ -52,7 +52,6 @@ final class Panel {
     var browser: Bool { entry == nil }
     var canShowPanorama: Bool { entry?.kind == .video && playback?.frame != nil }
     var ui: PanelUI { PanelUI(size: placement.size) }
-    var minimumSize: Vec2 { browser ? PanelUI.browserMinimum : PanelUI.mediaMinimum }
     var page: Int { pageAnchor / ui.pageSize }
     var pageCount: Int { max(1, (entries.count + ui.pageSize - 1) / ui.pageSize) }
     var visibleEntries: ArraySlice<MediaEntry> {
@@ -90,7 +89,6 @@ final class Panel {
     private var thumbnailRange: Range<Int>?
     private var attemptedThumbnails: Set<URL> = []
     private var remainingThumbnails: ArraySlice<MediaEntry> = []
-    private var sizeToFit: Float?
     private let device: MTLDevice
     private let root: URL
 
@@ -105,12 +103,10 @@ final class Panel {
 
     func browse(_ url: URL) {
         if !browser {
-            placement.size = browserSize
             entry = nil
             playback = nil
             image = nil
             imageLoad = nil
-            sizeToFit = nil
             controls = false
         }
         directory = url
@@ -157,7 +153,7 @@ final class Panel {
         }[...]
     }
 
-    func open(_ entry: MediaEntry, state: SavedPanel? = nil, fit: Bool) {
+    func open(_ entry: MediaEntry, state: SavedPanel? = nil) {
         listing = nil
         entries = []
         resetThumbnails()
@@ -178,7 +174,6 @@ final class Panel {
             playback = Playback(entry: entry, paused: state?.paused ?? false, muted: state?.muted ?? false,
                                 loopStart: state?.loopStart ?? 0, loopEnd: state?.loopEnd)
         }
-        if fit { sizeToFit = placement.size.x }
     }
 
     func update(hostTime: Double, cache: CVMetalTextureCache, loadThumbnails: Bool) -> Bool {
@@ -215,21 +210,8 @@ final class Panel {
             }
         }
 
-        let newFrame = playback?.update(hostTime: hostTime, cache: cache) ?? false
-        if let width = sizeToFit {
-            let aspect = image.map { Float($0.width) / Float($0.height) } ?? playback?.aspect
-            if let aspect {
-                placement.size.y = max(minimumSize.y, width / clamp(aspect, 0.52, 3.0))
-                sizeToFit = nil
-            } else if entry?.kind == .audio {
-                placement.size.y = max(minimumSize.y, width * 0.48)
-                sizeToFit = nil
-            }
-        }
-        return newFrame
+        return playback?.update(hostTime: hostTime, cache: cache) ?? false
     }
-
-    func cancelFit() { sizeToFit = nil }
 
     var saved: SavedPanel {
         SavedPanel(placement: placement, directory: directory, media: entry?.url, pan: pan,

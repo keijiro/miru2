@@ -96,11 +96,9 @@ final class Workspace {
         var updatedFrames = 0
         var canStartThumbnail = !panels.contains { $0.hasThumbnailJob }
         for panel in panels {
-            let size = panel.placement.size
             if panel.update(hostTime: hostTime, cache: cache, loadThumbnails: canStartThumbnail) {
                 updatedFrames += 1
             }
-            if panel.placement.size != size { dirty = true }
             if panel.browser, panel.hasThumbnailJob { canStartThumbnail = false }
         }
         for pointer in pointers {
@@ -154,13 +152,12 @@ final class Workspace {
                 var placement = state.placement
                 placement.center = origin.position + rotation.act(placement.center)
                 placement.yaw += origin.yaw
-                placement.size = simd_clamp(placement.size, PanelUI.mediaMinimum, [6, 6])
+                placement.size = simd_clamp(placement.size, PanelUI.minimumSize, [6, 6])
                 let panel = Panel(placement: placement, directory: directory, root: root, device: device)
                 if let url = state.media, url.isFileURL, isInside(url.resolvingSymlinksInPath(), root: root),
                    FileManager.default.fileExists(atPath: url.path), let kind = MediaKind(url: url) {
-                    panel.open(MediaEntry(url: url, kind: kind), state: state, fit: false)
+                    panel.open(MediaEntry(url: url, kind: kind), state: state)
                 } else {
-                    panel.placement.size = simd_max(placement.size, PanelUI.browserMinimum)
                     panel.browse(directory)
                 }
                 indexedPanels[index] = panel
@@ -177,8 +174,8 @@ final class Workspace {
         guard !initial.isEmpty else { return }
         let columns = min(initial.count, Int(ceil(sqrt(Double(initial.count) * 1.6))))
         let rows = (initial.count + columns - 1) / columns
-        let width = min(1, 4.4 / Float(columns))
-        let height = max(PanelUI.mediaMinimum.y, width * 0.58)
+        let width = clamp(4.4 / Float(columns), PanelUI.minimumSize.x, 1)
+        let height = max(PanelUI.minimumSize.y, width * 0.58)
         for (index, url) in initial.enumerated() {
             guard let kind = MediaKind(url: url) else { continue }
             let row = index / columns
@@ -189,7 +186,7 @@ final class Workspace {
                                       yaw: origin.yaw, size: [width, height])
             let panel = Panel(placement: placement, directory: root, root: root, device: device)
             panel.open(MediaEntry(url: url, kind: kind),
-                       state: SavedPanel(placement: placement, directory: root, muted: muted), fit: false)
+                       state: SavedPanel(placement: placement, directory: root, muted: muted))
             panels.append(panel)
         }
         if startPanorama, let panel = panels.first(where: { $0.entry?.kind == .video }) {
@@ -351,7 +348,6 @@ final class Workspace {
         let panel = hit.panel
         switch action {
         case .move, .resize, .seek, .media:
-            if case .resize = action { panel.cancelFit() }
             pointer.grab = Grab(panel: panel, action: action, initial: panel.placement,
                                 point: ray.point(at: hit.distance), initialPan: panel.pan, distance: hit.distance)
         case .close:
@@ -371,7 +367,7 @@ final class Workspace {
             guard isInside(resolved, root: root) else { return }
             if entry.kind == .folder { panel.browse(resolved) }
             else {
-                panel.open(entry, fit: true)
+                panel.open(entry)
                 if diagnostics { print("Opened \(entry.kind.rawValue): \(entry.name)") }
             }
         case .play: panel.playback?.togglePaused()
@@ -422,7 +418,7 @@ final class Workspace {
             guard let intersection = grab.initial.hit(ray) else { return }
             let diff = ray.point(at: intersection.distance) - grab.point
             let local = Vec2(simd_dot(diff, grab.initial.right), diff.y)
-            let size = simd_clamp(grab.initial.size + side * local, panel.minimumSize, [6, 6])
+            let size = simd_clamp(grab.initial.size + side * local, PanelUI.minimumSize, [6, 6])
             let offset = side * (size - grab.initial.size) * 0.5
             panel.placement.center = grab.initial.center + grab.initial.right * offset.x + Vec3(0, offset.y, 0)
             panel.placement.size = size
