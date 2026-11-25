@@ -9,6 +9,8 @@ struct Options {
 
     var root: URL
     var layoutDirectory: URL
+    var playbackHistoryURL: URL
+    var thumbnailCacheDirectory: URL
     var media: [URL] = []
     var simulator = false
     var metrics = false
@@ -26,7 +28,10 @@ struct Options {
         if !files.fileExists(atPath: root.path) {
             root = URL(fileURLWithPath: files.currentDirectoryPath, isDirectory: true)
         }
-        layoutDirectory = files.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Miru/Layouts")
+        let support = files.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Miru")
+        layoutDirectory = support.appendingPathComponent("Layouts")
+        playbackHistoryURL = support.appendingPathComponent("Playback.json")
+        thumbnailCacheDirectory = files.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches/Miru/Thumbnails/v1")
         var args = arguments.makeIterator()
         func value(for option: String) throws -> String {
             guard let value = args.next(), !value.hasPrefix("--") else { throw MiruError("Missing value for \(option)") }

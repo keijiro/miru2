@@ -221,11 +221,14 @@ final class VideoFrame {
 }
 
 final class Playback {
+    let url: URL
+    let openedAt = DispatchTime.now()
     private let player = AVPlayer()
     private var output: AVPlayerItemVideoOutput?
     private var videoAsset: VideoAsset?
     private var videoLoad: MediaLoad<(VideoAsset, VideoUV)>?
     private var videoTask: Task<Void, Never>?
+    private var initialPosition: Double?
     private var pendingSeek: MediaLoad<Bool>?
     private var seekTarget: Double?
     private(set) var frame: VideoFrame?
@@ -242,10 +245,13 @@ final class Playback {
         get { player.isMuted }
         set { player.isMuted = newValue }
     }
-    init(entry: MediaEntry, paused: Bool, muted: Bool, loopStart: Double, loopEnd: Double?) {
+    init(entry: MediaEntry, paused: Bool, muted: Bool, loopStart: Double, loopEnd: Double?, position: Double? = nil) {
+        url = entry.url
         self.paused = paused
         self.loopStart = loopStart
         self.loopEnd = loopEnd
+        let startTime = position ?? loopStart
+        initialPosition = startTime > 0 ? startTime : nil
         player.actionAtItemEnd = .pause
         player.isMuted = muted
         if entry.kind == .video {
@@ -266,7 +272,7 @@ final class Playback {
 
     private func start(_ item: AVPlayerItem) {
         player.replaceCurrentItem(with: item)
-        if !paused && loopStart == 0 { player.play() }
+        if !paused && initialPosition == nil { player.play() }
     }
 
     private func startVideo(_ video: VideoAsset, uv: VideoUV) {
@@ -296,7 +302,15 @@ final class Playback {
     func togglePaused() {
         paused.toggle()
         if paused { player.pause() }
-        else { player.play() }
+        else if initialPosition == nil { player.play() }
+    }
+
+    var savedState: PlaybackState? {
+        guard let item = player.currentItem, item.status == .readyToPlay,
+              !failed, duration > 0, initialPosition == nil else { return nil }
+        let position = pendingSeek == nil ? player.currentTime().seconds : time
+        return PlaybackState(position: clamp(position.isFinite ? position : time, 0, duration),
+                             loopStart: loopStart, loopEnd: loopEnd)
     }
 
     func seek(_ seconds: Double, precise: Bool = false) {
@@ -330,14 +344,14 @@ final class Playback {
             failed = true
             return false
         }
-        if duration == 0 {
+        if duration == 0, item.status == .readyToPlay {
             let seconds = item.duration.seconds
             if seconds.isFinite && seconds > 0 {
                 duration = seconds
                 loopStart = clamp(loopStart, 0, max(0, duration - 0.1))
                 loopEnd = loopEnd.map { min($0, duration) }.flatMap { $0 > loopStart + 0.1 ? $0 : nil }
-                if loopStart > 0 { seek(loopStart, precise: true) }
-                if !paused { player.play() }
+                if let initialPosition { seek(initialPosition, precise: true) }
+                else if !paused { player.play() }
             }
         }
         if output != nil, aspect == nil {
@@ -352,6 +366,7 @@ final class Playback {
                 seek(next, precise: true)
                 return false
             }
+            initialPosition = nil
             if !paused { player.play() }
         }
 

@@ -49,6 +49,8 @@ final class Workspace {
     let cache: CVMetalTextureCache
     private let layoutURL: URL?
     private let storage = DispatchQueue(label: "miru.layout", qos: .utility)
+    private let history: PlaybackHistory?
+    private let thumbnailCache: ThumbnailCache
     private(set) var panels: [Panel] = []
     private(set) var panorama: Panel?
     private(set) var panoramaYaw: Float = 0
@@ -70,6 +72,8 @@ final class Workspace {
         muted = options.stressCount != nil
         startPanorama = options.startPanorama
         diagnostics = options.metrics
+        history = options.stressCount == nil ? PlaybackHistory(url: options.playbackHistoryURL) : nil
+        thumbnailCache = ThumbnailCache(directory: options.thumbnailCacheDirectory)
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(nil, nil, device, nil, &cache) == kCVReturnSuccess, let cache else {
             throw MiruError("Could not create the Core Video Metal texture cache")
@@ -120,7 +124,8 @@ final class Workspace {
                     rememberBrowserDirectory(panel.directory)
                 }
             }
-            if panel.update(hostTime: hostTime, cache: cache, loadThumbnails: canStartThumbnail) {
+            if panel.update(hostTime: hostTime, cache: cache, thumbnailCache: thumbnailCache,
+                            loadThumbnails: canStartThumbnail) {
                 updatedFrames += 1
             }
             if panel.browser, panel.hasThumbnailJob { canStartThumbnail = false }
@@ -178,7 +183,7 @@ final class Workspace {
                 let panel = Panel(placement: placement, directory: directory, root: root, device: device)
                 if let url = state.media, url.isFileURL, isInside(url.resolvingSymlinksInPath(), root: root),
                    FileManager.default.fileExists(atPath: url.path), let kind = MediaKind(url: url) {
-                    panel.open(MediaEntry(url: url, kind: kind), state: state)
+                    panel.open(MediaEntry(url: url, kind: kind), state: state, history: history)
                 } else {
                     panel.browse(directory)
                 }
@@ -208,7 +213,7 @@ final class Workspace {
                                       size: [width, height])
             let panel = Panel(placement: placement, directory: root, root: root, device: device)
             panel.open(MediaEntry(url: url, kind: kind),
-                       state: SavedPanel(placement: placement, directory: root, muted: muted))
+                       state: SavedPanel(placement: placement, directory: root, muted: muted), history: history)
             panels.append(panel)
         }
         if startPanorama, let panel = panels.first(where: { $0.entry?.kind == .video }) {
@@ -217,6 +222,17 @@ final class Workspace {
     }
 
     func finish() {
+        if let history {
+            var states: [String: PlaybackState] = [:]
+            // A browser panel can start playback long after the panel itself was created.
+            for playback in panels.compactMap(\.playback).sorted(by: { $0.openedAt < $1.openedAt }) {
+                if let state = playback.savedState {
+                    states[playback.url.path] = state
+                }
+            }
+            history.record(states)
+            history.finish()
+        }
         if dirty || pointers.contains(where: { $0.grab != nil }) { save() }
         storage.sync {}
     }
@@ -414,13 +430,17 @@ final class Workspace {
                 pointer.grab?.dragTarget = panel.scrollOffset
             default: break
             }
-        case .close:
+        case .close, .back:
+            if let history, let playback = panel.playback, let state = playback.savedState {
+                history.record([playback.url.path: state])
+            }
             if panorama === panel { panorama = nil }
-            panels.removeAll { $0 === panel }
-        case .back:
-            if panorama === panel { panorama = nil }
-            panel.browse(panel.directory, offset: panel.scrollOffset)
-            rememberBrowserDirectory(panel.directory)
+            if action == .back {
+                panel.browse(panel.directory, offset: panel.scrollOffset)
+                rememberBrowserDirectory(panel.directory)
+            } else {
+                panels.removeAll { $0 === panel }
+            }
         case .play: panel.playback?.togglePaused()
         case .mute:
             if let playback = panel.playback { playback.muted.toggle() }
@@ -446,7 +466,7 @@ final class Workspace {
         if entry.kind == .folder {
             panel.openFolder(entry)
         } else {
-            panel.open(entry, at: lastTime)
+            panel.open(entry, history: history, at: lastTime)
             if diagnostics { print("Opened \(entry.kind.rawValue): \(entry.name)") }
         }
         rememberBrowserDirectory(panel.directory)

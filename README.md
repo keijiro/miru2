@@ -15,7 +15,11 @@ Connect to your Mac from a passthrough-capable OXRSys client. For Wi-Fi streamin
 
 The first build creates `.build/runtime/oxrsys-runtime.toml` with `passthrough_enabled` and `app_alpha_blend_passthrough` enabled. If you have a configuration at `~/Library/Application Support/OXRSys/oxrsys-runtime.toml`, OXRSys gives it precedence. Enable both settings there as well.
 
-With no `--library` argument, miru opens `../miru/samples` if it exists and otherwise uses `~/Movies`. Window placement, open files, mute settings, loop points, and the active panorama are saved per library. Playback supports the video and audio formats available through AVFoundation. Audio plays through the Mac.
+With no `--library` argument, miru opens `../miru/samples` if it exists and otherwise uses `~/Movies`. Window placement, open files, mute settings, and the active panorama are saved per library. Playback supports the video and audio formats available through AVFoundation. Audio plays through the Mac.
+
+Video and audio resume from their saved positions with their A/B loop points. Miru saves playback history when you return to the browser or quit. If you open the same file in multiple views, the last view closed supplies the saved state. When quitting with several views of the same file still open, the most recently opened view supplies it.
+
+Playback history is stored in `~/Library/Application Support/Miru/Playback.json`. The browser reuses image and video thumbnails from `~/Library/Caches/Miru/Thumbnails/v1/` and trims the cache when it exceeds 256 MiB.
 
 ### OXRSys Simulator
 

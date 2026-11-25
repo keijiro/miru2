@@ -211,7 +211,8 @@ final class Panel {
         }[...]
     }
 
-    func open(_ entry: MediaEntry, state: SavedPanel? = nil, at time: Double? = nil) {
+    func open(_ entry: MediaEntry, state: SavedPanel? = nil,
+              history: PlaybackHistory? = nil, at time: Double? = nil) {
         listing = nil
         mediaStarted = time
         if time == nil {
@@ -232,12 +233,17 @@ final class Panel {
             imageLoad = loadImage(entry.url, device: device)
         } else {
             imageLoad = nil
-            playback = Playback(entry: entry, paused: state?.paused ?? false, muted: state?.muted ?? false,
-                                loopStart: state?.loopStart ?? 0, loopEnd: state?.loopEnd)
+            let url = entry.url.standardizedFileURL.resolvingSymlinksInPath()
+            let saved = history?.state(for: url.path)
+            playback = Playback(entry: MediaEntry(url: url, kind: entry.kind),
+                                paused: state?.paused ?? false, muted: state?.muted ?? false,
+                                loopStart: saved?.loopStart ?? state?.loopStart ?? 0,
+                                loopEnd: saved == nil ? state?.loopEnd : saved?.loopEnd,
+                                position: saved?.position)
         }
     }
 
-    func update(hostTime: Double, cache: CVMetalTextureCache, loadThumbnails: Bool) -> Bool {
+    func update(hostTime: Double, cache: CVMetalTextureCache, thumbnailCache: ThumbnailCache, loadThumbnails: Bool) -> Bool {
         bodyStarted = bodyStarted ?? hostTime
         if let start = mediaStarted, hostTime - start >= Self.outlineDuration {
             mediaStarted = nil
@@ -280,7 +286,7 @@ final class Panel {
             thumbnailLoad = result
             thumbnailURL = next.url
             thumbnailJob = Task.detached(priority: .utility) {
-                result.complete((next.url, await loadThumbnail(next)))
+                result.complete((next.url, await thumbnailCache.image(for: next)))
             }
         }
 
