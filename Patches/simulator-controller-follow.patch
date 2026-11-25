@@ -1,0 +1,40 @@
+--- a/clients/shared/OXRSysSimulator/Sources/OXRSysSimulator/SimulatorInputManager.swift
++++ b/clients/shared/OXRSysSimulator/Sources/OXRSysSimulator/SimulatorInputManager.swift
+@@ -16,7 +16,7 @@
+     private var headPosition: SIMD3<Float> = [0, 1.6, 0]
+ 
+-    // Controller positions
+-    private var leftControllerPos: SIMD3<Float> = [-0.2, 1.3, -0.4]
+-    private var rightControllerPos: SIMD3<Float> = [0.2, 1.3, -0.4]
++    // Controller offsets in head space
++    private var leftControllerOffset: SIMD3<Float> = [-0.2, -0.3, -0.4]
++    private var rightControllerOffset: SIMD3<Float> = [0.2, -0.3, -0.4]
+ 
+     // Button state
+@@ -196,7 +196,7 @@
+ 
+             if leftShift && !rightShift {
+-                leftControllerPos += moveDir
++                leftControllerOffset += buildHeadQuaternion().inverse.act(moveDir)
+             } else if rightShift && !leftShift {
+-                rightControllerPos += moveDir
++                rightControllerOffset += buildHeadQuaternion().inverse.act(moveDir)
+             } else {
+                 headPosition += moveDir
+@@ -220,11 +220,13 @@
+         packet.headOrientation = (headQuat.imag.x, headQuat.imag.y, headQuat.imag.z, headQuat.real)
+ 
+-        // Controllers — orient same as head for simplicity
++        // Keep both controllers in the same place relative to the headset.
++        let leftControllerPos = headPosition + headQuat.act(leftControllerOffset)
++        let rightControllerPos = headPosition + headQuat.act(rightControllerOffset)
+         packet.trackingFlags |= TrackingFlagsValues.leftControllerActive
+         packet.trackingFlags |= TrackingFlagsValues.rightControllerActive
+         packet.leftControllerPos = (leftControllerPos.x, leftControllerPos.y, leftControllerPos.z)
+-        packet.leftControllerRot = (headQuat.imag.x, headQuat.imag.y, headQuat.imag.z, headQuat.real)
++        packet.leftControllerRot = packet.headOrientation
+         packet.rightControllerPos = (rightControllerPos.x, rightControllerPos.y, rightControllerPos.z)
+-        packet.rightControllerRot = (headQuat.imag.x, headQuat.imag.y, headQuat.imag.z, headQuat.real)
++        packet.rightControllerRot = packet.headOrientation
+ 
+         // Buttons

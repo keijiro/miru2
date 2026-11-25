@@ -26,7 +26,7 @@ With no `--library` argument, miru opens `../miru/samples` if it exists and othe
 
 You can reuse an existing `oxrsys-test` build of the same revision with `MIRU_OXRSYS_BUILD=../oxrsys-test/.build ./build.sh --simulator`.
 
-In the Simulator, select **Search for Server**, then **Connect**. Click the streamed view to focus keyboard input. **F** and **G** act as the left and right triggers, and the arrow keys turn your view. Tap **Esc** to open a file browser or hold it to recenter the workspace. Passthrough areas appear as a dark background in the Simulator.
+In the Simulator, select **Search for Server**, then **Connect**. Click the streamed view to focus keyboard input. **F** and **G** act as the left and right triggers, and the arrow keys turn your view. Both controllers follow your head as you move and turn. Tap **Esc** to open a file browser or hold it to recenter the workspace. Passthrough areas appear as a dark background in the Simulator.
 
 ## VR controls
 

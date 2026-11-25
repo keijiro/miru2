@@ -53,12 +53,14 @@ xcrun swiftc -target "$(uname -m)-apple-macosx14.0" -O \
     Sources/*.swift -o .build/miru
 
 if [[ "${1:-}" == --simulator ]]; then
-    simulator="$dependency_build/simulator/Build/Products/Debug/OXRSys Simulator.app"
-    if [[ -z "${MIRU_OXRSYS_BUILD:-}" || ! -d "$simulator" ]]; then
-        xcodebuild -project "$dependency_build/oxrsys/clients/simulator/OXRSys Simulator.xcodeproj" \
-            -scheme 'OXRSys Simulator' -configuration Debug -destination 'platform=macOS' \
-            -derivedDataPath "$PWD/.build/simulator" CODE_SIGNING_ALLOWED=NO build
-        simulator="$PWD/.build/simulator/Build/Products/Debug/OXRSys Simulator.app"
-    fi
+    simulator_source="$PWD/.build/simulator-source"
+    mkdir -p "$simulator_source"
+    git -C "$dependency_build/oxrsys" archive "$oxrsys_revision" clients/simulator clients/shared config |
+        tar -x -C "$simulator_source"
+    patch -s -d "$simulator_source" -p1 < Patches/simulator-controller-follow.patch
+    xcodebuild -project "$simulator_source/clients/simulator/OXRSys Simulator.xcodeproj" \
+        -scheme 'OXRSys Simulator' -configuration Debug -destination 'platform=macOS' \
+        -derivedDataPath "$PWD/.build/simulator" CODE_SIGNING_ALLOWED=NO build
+    simulator="$PWD/.build/simulator/Build/Products/Debug/OXRSys Simulator.app"
     printf '%s\n' "$simulator" > .build/simulator-path
 fi
