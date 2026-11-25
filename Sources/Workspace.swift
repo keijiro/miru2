@@ -11,12 +11,14 @@ private struct Grab {
     let initial: Placement
     let point: Vec3
     let initialPan: Vec2
-    var distance: Float
+    let distance: Float
     var moved = false
 }
 
+private enum PointerButton { case trigger, squeeze }
+
 private final class Pointer {
-    var pressed = false
+    var button: PointerButton?
     var acceptsPress = false
     var emptyPress: Double?
     var grab: Grab?
@@ -94,7 +96,7 @@ final class Workspace {
         case nil: break
         }
         for panel in panels { panel.placement.face(center) }
-        for (pointer, hand) in zip(pointers, hands) { update(pointer, with: hand, at: hostTime, delta: delta) }
+        for (pointer, hand) in zip(pointers, hands) { update(pointer, with: hand, at: hostTime) }
         var updatedFrames = 0
         var canStartThumbnail = !panels.contains { $0.hasThumbnailJob }
         for panel in panels {
@@ -239,7 +241,7 @@ final class Workspace {
     var beams: [(Ray, Float, Bool)] {
         pointers.compactMap { pointer in
             guard let ray = pointer.ray else { return nil }
-            return (ray, pointer.hit?.distance ?? 1.35, pointer.pressed)
+            return (ray, pointer.hit?.distance ?? 1.35, pointer.button != nil)
         }
     }
 
@@ -252,7 +254,7 @@ final class Workspace {
 
     private(set) var lastTime = 0.0
 
-    private func update(_ pointer: Pointer, with hand: Hand, at time: Double, delta: Float) {
+    private func update(_ pointer: Pointer, with hand: Hand, at time: Double) {
         guard let pose = hand.pose else {
             if pointer.grab != nil { dirty = true }
             pointer.grab = nil
@@ -260,16 +262,18 @@ final class Workspace {
             pointer.preview = nil
             pointer.ray = nil
             pointer.hit = nil
-            pointer.pressed = false
+            pointer.button = nil
             pointer.acceptsPress = false
             return
         }
         let ray = Ray(pose)
         pointer.ray = ray
-        let pressed = hand.trigger > (pointer.pressed ? 0.35 : 0.55)
-        defer { pointer.pressed = pressed }
-        if !pressed {
-            pointer.acceptsPress = true
+        let trigger = hand.trigger > (pointer.button == .trigger ? 0.35 : 0.55)
+        let squeeze = hand.squeeze > (pointer.button == .squeeze ? 0.35 : 0.55)
+        let button = pointer.button ?? (squeeze ? .squeeze : .trigger)
+        if !(button == .squeeze ? squeeze : trigger) {
+            pointer.button = nil
+            pointer.acceptsPress = !trigger && !squeeze
             if let grab = pointer.grab {
                 if grab.action == .seek, let hit = grab.panel.placement.hit(ray) {
                     seek(grab.panel, at: hit.uv.x, precise: true)
@@ -284,11 +288,13 @@ final class Workspace {
             return
         }
         guard pointer.acceptsPress else { return }
-        if !pointer.pressed {
+        if pointer.button == nil {
+            pointer.button = button
             if let hit = pick(ray) {
-                guard !pointers.contains(where: { $0.grab?.panel === hit.panel }), let action = hit.action else { return }
+                guard !pointers.contains(where: { $0.grab?.panel === hit.panel }),
+                      let action = button == .squeeze ? .move(.zero) : hit.action else { return }
                 press(action, hit: hit, ray: ray, pointer: pointer)
-            } else {
+            } else if button == .trigger {
                 pointer.emptyPress = time
             }
         }
@@ -303,7 +309,7 @@ final class Workspace {
             }
         }
         if var grab = pointer.grab {
-            apply(&grab, ray: ray, stick: hand.stick, delta: delta)
+            apply(&grab, ray: ray)
             pointer.grab = grab
         }
     }
@@ -403,11 +409,10 @@ final class Workspace {
         if precise || abs(playback.time - time) > 0.15 { playback.seek(time, precise: precise) }
     }
 
-    private func apply(_ grab: inout Grab, ray: Ray, stick: Float, delta: Float) {
+    private func apply(_ grab: inout Grab, ray: Ray) {
         let panel = grab.panel
         switch grab.action {
         case .move:
-            if abs(stick) > 0.2 { grab.distance = clamp(grab.distance + stick * delta * 2, 0.5, 24) }
             panel.placement.center = grab.initial.center + ray.point(at: grab.distance) - grab.point
             panel.placement.face(head.position.vector)
         case .resize(let side):

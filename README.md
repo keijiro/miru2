@@ -36,7 +36,7 @@ In the Simulator, select **Search for Server**, then **Connect**. Click the stre
 | Tap the left controller's menu button | Open a file browser in front of you |
 | Hold the left controller's menu button for half a second | Recenter the workspace and 180° video to face your current direction |
 | Drag a window edge or corner | Move or resize the window |
-| Move the thumbstick up or down while dragging a window edge | Adjust the window’s distance |
+| Hold the Quest controller’s squeeze button anywhere on a window and drag | Move the window |
 | Tap a video or audio window | Show or hide the playback panel below the window |
 | Drag inside an image or video | Pan the cropped media |
 | Select the hemisphere icon in the playback controls | Toggle a 180° equirectangular side-by-side video as the background, with the left eye first |

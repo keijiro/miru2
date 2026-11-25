@@ -55,8 +55,8 @@ private func makeAction(
 
 struct Hand {
     var pose: XrPosef?
+    var squeeze: Float = 0
     var trigger: Float = 0
-    var stick: Float = 0
 }
 
 enum MenuCommand {
@@ -98,14 +98,13 @@ private func actionValue(_ session: XrSession, _ action: XrAction, _ path: XrPat
 }
 
 private func locateHand(
-    _ session: XrSession, _ path: XrPath, _ handSpace: XrSpace, _ trigger: XrAction, _ stick: XrAction,
+    _ session: XrSession, _ path: XrPath, _ handSpace: XrSpace, _ trigger: XrAction, _ squeeze: XrAction,
     _ origin: XrSpace, _ time: XrTime
 ) throws -> Hand {
     var location = XrSpaceLocation(type: XR_TYPE_SPACE_LOCATION, next: nil, locationFlags: 0, pose: identityPose)
     try check(xrLocateSpace(handSpace, origin, time, &location), "xrLocateSpace")
     guard location.locationFlags & validPoseFlags == validPoseFlags else { return Hand() }
-    return try Hand(pose: location.pose, trigger: actionValue(session, trigger, path),
-                    stick: actionValue(session, stick, path))
+    return try Hand(pose: location.pose, squeeze: actionValue(session, squeeze, path), trigger: actionValue(session, trigger, path))
 }
 
 private final class Eye {
@@ -299,7 +298,7 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
 
     let poseAction = try makeAction(set, "hand_pose", "Controller pose", XR_ACTION_TYPE_POSE_INPUT, paths)
     let triggerAction = try makeAction(set, "trigger", "Select", XR_ACTION_TYPE_FLOAT_INPUT, paths)
-    let stickAction = try makeAction(set, "depth", "Window distance", XR_ACTION_TYPE_FLOAT_INPUT, paths)
+    let squeezeAction = try makeAction(set, "squeeze", "Move window", XR_ACTION_TYPE_FLOAT_INPUT, paths)
     let menuAction = try makeAction(set, "menu", "Menu", XR_ACTION_TYPE_BOOLEAN_INPUT, [paths[0]])
 
     let profile = try xrPath(instance, "/interaction_profiles/oculus/touch_controller")
@@ -308,7 +307,9 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
         bindings.append(XrActionSuggestedBinding(action: poseAction, binding: try xrPath(instance, hand + "/input/aim/pose")))
         let selectPath = options.simulator ? "/input/squeeze/value" : "/input/trigger/value"
         bindings.append(XrActionSuggestedBinding(action: triggerAction, binding: try xrPath(instance, hand + selectPath)))
-        bindings.append(XrActionSuggestedBinding(action: stickAction, binding: try xrPath(instance, hand + "/input/thumbstick/y")))
+        if !options.simulator {
+            bindings.append(XrActionSuggestedBinding(action: squeezeAction, binding: try xrPath(instance, hand + "/input/squeeze/value")))
+        }
     }
     bindings.append(XrActionSuggestedBinding(action: menuAction, binding: try xrPath(instance, handNames[0] + "/input/menu/click")))
     try bindings.withUnsafeBufferPointer {
@@ -457,8 +458,8 @@ func runMiru(stop: OSAllocatedUnfairLock<Bool>, options: Options) throws {
                 try check(syncResult, "xrSyncActions")
                 if syncResult == XR_SUCCESS {
                     let time = frame.predictedDisplayTime
-                    hands[0] = try locateHand(session, paths[0], leftSpace, triggerAction, stickAction, origin, time)
-                    hands[1] = try locateHand(session, paths[1], rightSpace, triggerAction, stickAction, origin, time)
+                    hands[0] = try locateHand(session, paths[0], leftSpace, triggerAction, squeezeAction, origin, time)
+                    hands[1] = try locateHand(session, paths[1], rightSpace, triggerAction, squeezeAction, origin, time)
                     let bothHands = hands.allSatisfy { $0.pose != nil }
                     if bothHands && !hadHands { print("Tracking both controllers.") }
                     hadHands = bothHands
