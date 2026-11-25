@@ -1,0 +1,4 @@
+module COpenXR [system] {
+    header "OpenXRMetal.h"
+    export *
+}
