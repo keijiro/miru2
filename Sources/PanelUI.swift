@@ -209,7 +209,7 @@ struct Canvas {
         _ value: String, in rect: Rect, size: CGFloat, white: CGFloat = 0.93, centered: Bool = false
     ) {
         let box = bounds(rect)
-        let font = CTFontCreateWithName("HelveticaNeue-Thin" as CFString, size, nil)
+        let font = CTFont(.system, size: size)
         let attributes = [
             kCTFontAttributeName: font,
             kCTForegroundColorAttributeName: CGColor(gray: white, alpha: 1)
