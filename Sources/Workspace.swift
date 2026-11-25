@@ -40,6 +40,7 @@ private struct SavedLayout: Codable {
     var panels: [SavedPanel]
     var panorama: Int?
     var panoramaYaw: Float?
+    var lastBrowserDirectory: URL?
 }
 
 final class Workspace {
@@ -55,6 +56,7 @@ final class Workspace {
     private let pointers = [Pointer(), Pointer()]
     private var head = XrPosef()
     private var restored: SavedLayout?
+    private var lastBrowserDirectory: URL?
     private let initial: [URL]
     private let muted: Bool
     private let startPanorama: Bool
@@ -112,7 +114,11 @@ final class Workspace {
                         if abs(hand.stickY) > abs(stick) { stick = hand.stickY }
                     }
                 }
+                let previousOffset = panel.scrollOffset
                 panel.updateScroll(dragTarget: grab?.dragTarget, stick: stick, delta: delta)
+                if abs(stick) > 0.15, panel.scrollOffset != previousOffset {
+                    rememberBrowserDirectory(panel.directory)
+                }
             }
             if panel.update(hostTime: hostTime, cache: cache, loadThumbnails: canStartThumbnail) {
                 updatedFrames += 1
@@ -160,6 +166,7 @@ final class Workspace {
         anchor = origin
         let rotation = simd_quatf(angle: origin.yaw, axis: Vec3(0, 1, 0))
         if let restored {
+            lastBrowserDirectory = restored.lastBrowserDirectory
             var indexedPanels: [Int: Panel] = [:]
             for (index, state) in restored.panels.enumerated() {
                 let directory = state.directory.resolvingSymlinksInPath()
@@ -224,7 +231,9 @@ final class Workspace {
             return saved
         }
         let index = panorama.flatMap { active in panels.firstIndex { $0 === active } }
-        let layout = SavedLayout(panels: saved, panorama: index, panoramaYaw: index.map { _ in panoramaYaw - anchor.yaw })
+        let layout = SavedLayout(panels: saved, panorama: index,
+                                 panoramaYaw: index.map { _ in panoramaYaw - anchor.yaw },
+                                 lastBrowserDirectory: lastBrowserDirectory)
         storage.async {
             do {
                 try FileManager.default.createDirectory(at: layoutURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -245,11 +254,31 @@ final class Workspace {
     }
 
     private func openBrowser(at position: Vec3) {
-        let panel = Panel(placement: browserPlacement(at: position), directory: root, root: root, device: device)
-        panel.browse(root)
+        let directory = browserStartDirectory()
+        let panel = Panel(placement: browserPlacement(at: position), directory: directory, root: root, device: device)
+        panel.browse(directory)
         panels.append(panel)
         dirty = true
         if diagnostics { print("Opened a media browser.") }
+    }
+
+    private func browserStartDirectory() -> URL {
+        if let saved = lastBrowserDirectory, saved.isFileURL {
+            let directory = saved.standardizedFileURL.resolvingSymlinksInPath()
+            var isDirectory: ObjCBool = false
+            if isInside(directory, root: root),
+               FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                return directory
+            }
+        }
+        lastBrowserDirectory = nil
+        return root
+    }
+
+    private func rememberBrowserDirectory(_ directory: URL) {
+        guard lastBrowserDirectory != directory else { return }
+        lastBrowserDirectory = directory
+        dirty = true
     }
 
     var beams: [(Ray, Float, Bool)] {
@@ -391,6 +420,7 @@ final class Workspace {
         case .back:
             if panorama === panel { panorama = nil }
             panel.browse(panel.directory, offset: panel.scrollOffset)
+            rememberBrowserDirectory(panel.directory)
         case .play: panel.playback?.togglePaused()
         case .mute:
             if let playback = panel.playback { playback.muted.toggle() }
@@ -419,6 +449,7 @@ final class Workspace {
             panel.open(entry, at: lastTime)
             if diagnostics { print("Opened \(entry.kind.rawValue): \(entry.name)") }
         }
+        rememberBrowserDirectory(panel.directory)
         dirty = true
     }
 
@@ -447,7 +478,12 @@ final class Workspace {
             let local = grab.initial.localOffset(ray.point(at: intersection.distance) - grab.point)
             guard grab.moved || simd_length(local) > 0.012 else { return }
             grab.moved = true
-            grab.dragTarget = grab.initialScroll + local.y
+            let target = grab.initialScroll + local.y
+            let limit = panel.ui.scrollLimit(count: panel.entries.count)
+            if let previous = grab.dragTarget, clamp(target, 0, limit) != clamp(previous, 0, limit) {
+                rememberBrowserDirectory(panel.directory)
+            }
+            grab.dragTarget = target
         case .move:
             panel.placement.center = grab.initial.center + ray.point(at: grab.distance) - grab.point
             panel.placement.face(head.position.vector)
