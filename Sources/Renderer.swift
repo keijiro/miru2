@@ -150,8 +150,8 @@ final class Renderer {
             let end = ray.point(at: max(0.07, distance - 0.006))
             output.quads.append(DrawQuad(model: beam(from: ray.point(at: 0.055), to: end),
                                          material: .fill([0.82, 0.85, 0.9, pressed ? 0.85 : 0.53])))
-            let yaw = atan2(-ray.direction.x, -ray.direction.z)
-            let dot = Placement(center: end, yaw: yaw, size: Vec2(repeating: pressed ? 0.011 : 0.007))
+            var dot = Placement(center: end, size: Vec2(repeating: pressed ? 0.011 : 0.007))
+            dot.face(end - Vec3(ray.direction.x, 0, ray.direction.z))
             output.quad(dot, .full, .fill([0.95, 0.95, 0.97, 1]))
         }
         return output

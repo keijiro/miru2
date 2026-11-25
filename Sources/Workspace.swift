@@ -93,6 +93,7 @@ final class Workspace {
         case .recenter: recenter()
         case nil: break
         }
+        for panel in panels { panel.placement.face(center) }
         for (pointer, hand) in zip(pointers, hands) { update(pointer, with: hand, at: hostTime, delta: delta) }
         var updatedFrames = 0
         var canStartThumbnail = !panels.contains { $0.hasThumbnailJob }
@@ -124,7 +125,6 @@ final class Workspace {
         let rotation = simd_quatf(angle: yaw, axis: [0, 1, 0])
         for panel in panels {
             panel.placement.center = origin.position + rotation.act(panel.placement.center - anchor.position)
-            panel.placement.yaw += yaw
         }
         if panorama != nil { panoramaYaw = origin.yaw }
         self.anchor = origin
@@ -148,11 +148,9 @@ final class Workspace {
             for (index, state) in restored.panels.enumerated() {
                 let directory = state.directory.resolvingSymlinksInPath()
                 guard state.directory.isFileURL, isInside(directory, root: root),
-                      state.placement.center.allFinite, state.placement.yaw.isFinite,
-                      state.placement.size.allFinite else { continue }
+                      state.placement.center.allFinite, state.placement.size.allFinite else { continue }
                 var placement = state.placement
                 placement.center = origin.position + rotation.act(placement.center)
-                placement.yaw += origin.yaw
                 placement.size = simd_clamp(placement.size, PanelUI.minimumSize, [6, 6])
                 let panel = Panel(placement: placement, directory: directory, root: root, device: device)
                 if let url = state.media, url.isFileURL, isInside(url.resolvingSymlinksInPath(), root: root),
@@ -184,7 +182,7 @@ final class Workspace {
             let x = (Float(index % columns) - Float(rowCount - 1) * 0.5) * width * 1.06
             let y = (Float(rows - 1) * 0.5 - Float(row)) * height * 1.1
             let placement = Placement(center: origin.position + rotation.act([x, y, -3]),
-                                      yaw: origin.yaw, size: [width, height])
+                                      size: [width, height])
             let panel = Panel(placement: placement, directory: root, root: root, device: device)
             panel.open(MediaEntry(url: url, kind: kind),
                        state: SavedPanel(placement: placement, directory: root, muted: muted))
@@ -207,7 +205,6 @@ final class Workspace {
         let saved = panels.map { panel in
             var saved = panel.saved
             saved.placement.center = inverse.act(saved.placement.center - anchor.position)
-            saved.placement.yaw -= anchor.yaw
             return saved
         }
         let index = panorama.flatMap { active in panels.firstIndex { $0 === active } }
@@ -226,9 +223,9 @@ final class Workspace {
     }
 
     private func browserPlacement(at position: Vec3) -> Placement {
-        let toHead = head.position.vector - position
-        let yaw = hypot(toHead.x, toHead.z) > 0.001 ? atan2(toHead.x, toHead.z) : head.heading
-        return Placement(center: position, yaw: yaw, size: browserSize)
+        var placement = Placement(center: position, size: browserSize)
+        placement.face(head.position.vector)
+        return placement
     }
 
     private func openBrowser(at position: Vec3) {
@@ -412,15 +409,15 @@ final class Workspace {
         case .move:
             if abs(stick) > 0.2 { grab.distance = clamp(grab.distance + stick * delta * 2, 0.5, 24) }
             panel.placement.center = grab.initial.center + ray.point(at: grab.distance) - grab.point
-            let toHead = head.position.vector - panel.placement.center
-            if hypot(toHead.x, toHead.z) > 0.001 { panel.placement.yaw = atan2(toHead.x, toHead.z) }
+            panel.placement.face(head.position.vector)
         case .resize(let side):
             guard let intersection = grab.initial.hit(ray) else { return }
             let diff = ray.point(at: intersection.distance) - grab.point
-            let local = Vec2(simd_dot(diff, grab.initial.right), diff.y)
+            let local = grab.initial.localOffset(diff)
             let size = simd_clamp(grab.initial.size + side * local, PanelUI.minimumSize, [6, 6])
             let offset = side * (size - grab.initial.size) * 0.5
-            panel.placement.center = grab.initial.center + grab.initial.right * offset.x + Vec3(0, offset.y, 0)
+            panel.placement.center = grab.initial.center + grab.initial.right * offset.x + grab.initial.up * offset.y
+            panel.placement.face(head.position.vector)
             panel.placement.size = size
         case .seek:
             if let hit = panel.placement.hit(ray) { seek(panel, at: hit.uv.x, precise: false) }
@@ -430,7 +427,7 @@ final class Workspace {
             guard grab.moved || simd_length(diff) > 0.016 else { return }
             grab.moved = true
             let overflow = panel.mediaOverflow
-            let local = Vec2(simd_dot(diff, grab.initial.right), -diff.y)
+            let local = grab.initial.localOffset(diff) * Vec2(1, -1)
             let change = Vec2(overflow.x > 0.0001 ? local.x * 2 / overflow.x : 0,
                               overflow.y > 0.0001 ? local.y * 2 / overflow.y : 0)
             panel.pan = simd_clamp(grab.initialPan + change, Vec2(repeating: -1), Vec2(repeating: 1))

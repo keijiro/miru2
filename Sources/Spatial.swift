@@ -58,12 +58,32 @@ extension XrFovf {
 
 struct Placement: Codable {
     var center: Vec3
-    var yaw: Float
     var size: Vec2
+    private var axes = matrix_identity_float3x3
 
-    var orientation: simd_quatf { simd_quatf(angle: yaw, axis: [0, 1, 0]) }
-    var right: Vec3 { orientation.act([1, 0, 0]) }
-    var normal: Vec3 { orientation.act([0, 0, 1]) }
+    private enum CodingKeys: String, CodingKey { case center, size }
+
+    init(center: Vec3, size: Vec2) {
+        self.center = center
+        self.size = size
+    }
+
+    var right: Vec3 { axes.columns.0 }
+    var up: Vec3 { axes.columns.1 }
+    var normal: Vec3 { axes.columns.2 }
+
+    mutating func face(_ eye: Vec3) {
+        let toEye = eye - center
+        guard simd_length_squared(toEye) > 0.000001 else { return }
+        let normal = simd_normalize(toEye)
+        let horizontal = simd_cross(Vec3(0, 1, 0), normal)
+        let right = simd_length_squared(horizontal) > 0 ? simd_normalize(horizontal) : Vec3(1, 0, 0)
+        axes = simd_float3x3(columns: (right, simd_cross(normal, right), normal))
+    }
+
+    func localOffset(_ offset: Vec3) -> Vec2 {
+        Vec2(simd_dot(offset, right), simd_dot(offset, up))
+    }
 
     func hit(_ ray: Ray) -> (uv: Vec2, distance: Float)? {
         let denominator = simd_dot(ray.direction, normal)
@@ -71,15 +91,15 @@ struct Placement: Codable {
         let distance = simd_dot(center - ray.origin, normal) / denominator
         guard distance > 0.04 else { return nil }
         let fromCenter = ray.point(at: distance) - center
-        let uv = Vec2(simd_dot(fromCenter, right), -fromCenter.y) / size + Vec2(repeating: 0.5)
+        let uv = localOffset(fromCenter) * Vec2(1, -1) / size + Vec2(repeating: 0.5)
         return (uv, distance)
     }
 
     func model(rect: Rect = .full, offset: Float = 0) -> simd_float4x4 {
         let local = (rect.origin + rect.size * 0.5 - Vec2(repeating: 0.5)) * size
-        let worldCenter = center + right * local.x + Vec3(0, -local.y, 0) + normal * offset
+        let worldCenter = center + right * local.x - up * local.y + normal * offset
         return simd_float4x4(columns: (
-            Vec4(right * size.x * rect.size.x, 0), [0, size.y * rect.size.y, 0, 0],
+            Vec4(right * size.x * rect.size.x, 0), Vec4(up * size.y * rect.size.y, 0),
             Vec4(normal, 0), Vec4(worldCenter, 1)
         ))
     }
