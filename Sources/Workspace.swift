@@ -83,6 +83,7 @@ final class Workspace {
     }
 
     func update(views: [XrView], hands: [Hand], menu: MenuCommand?, hostTime: Double, delta: Float) -> Int {
+        lastTime = hostTime
         head = views[0].pose
         let center = (views[0].pose.position.vector + views[1].pose.position.vector) * 0.5
         head.position = XrVector3f(x: center.x, y: center.y, z: center.z)
@@ -238,13 +239,6 @@ final class Workspace {
         if diagnostics { print("Opened a media browser.") }
     }
 
-    func showsHeader(_ panel: Panel) -> Bool {
-        panel.browser || panel.controls || pointers.contains { pointer in
-            guard let hit = pointer.hit, hit.panel === panel else { return false }
-            return hit.uv.y * panel.placement.size.y < panel.ui.header.size.y + 0.014
-        }
-    }
-
     var beams: [(Ray, Float, Bool)] {
         pointers.compactMap { pointer in
             guard let ray = pointer.ray else { return nil }
@@ -259,10 +253,9 @@ final class Workspace {
         }
     }
 
-    private var lastTime = 0.0
+    private(set) var lastTime = 0.0
 
     private func update(_ pointer: Pointer, with hand: Hand, at time: Double, delta: Float) {
-        lastTime = time
         guard let pose = hand.pose else {
             if pointer.grab != nil { dirty = true }
             pointer.grab = nil
@@ -284,7 +277,7 @@ final class Workspace {
                 if grab.action == .seek, let hit = grab.panel.placement.hit(ray) {
                     seek(grab.panel, at: hit.uv.x, precise: true)
                 } else if grab.action == .media && !grab.moved && grab.panel.playback != nil {
-                    grab.panel.controls.toggle()
+                    grab.panel.toggleControls(at: time)
                 }
                 dirty = true
             }
@@ -324,20 +317,28 @@ final class Workspace {
             guard let hit = panel.placement.hit(ray), hit.distance < (nearest?.distance ?? .infinity) else { continue }
             let uv = hit.uv
             let edge = Vec2(repeating: PanelUI.gripReach) / panel.placement.size
-            guard uv.x >= -edge.x, uv.x <= 1 + edge.x, uv.y >= -edge.y, uv.y <= 1 + edge.y else { continue }
             let ui = panel.ui
             let point = uv * ui.size
-            let visible = panel.visibleEntries
-            let action: PanelAction?
-            if let button = panel.buttons(panorama: panorama === panel)
-                .first(where: { $0.rect.contains(point) }) {
-                action = button.action
-            } else if panel.browser, let card = ui.cardIndex(at: point), card < visible.count {
-                action = .entry(visible.startIndex + card)
-            } else if panel.controls, ui.seek.contains(point), panel.playback != nil {
-                action = .seek
-            } else {
-                action = ui.grip(at: point) ?? (panel.playback != nil || panel.contentAspect != nil ? .media : nil)
+            let inBody = uv.x >= -edge.x && uv.x <= 1 + edge.x && uv.y >= -edge.y && uv.y <= 1 + edge.y
+            let inTransport = panel.controls && ui.transport.contains(point)
+            guard inBody || inTransport else { continue }
+            var action: PanelAction?
+            if panel.openingAge(at: lastTime) >= Panel.openingDuration, panel.mediaStarted == nil {
+                if inTransport, let playback = panel.playback, let start = panel.transportChanged,
+                   lastTime - start >= Panel.openingDuration {
+                    let buttons = ui.playbackButtons(playback, video: panel.canShowPanorama, panorama: panorama === panel)
+                    action = ui.seek.contains(point) ? .seek : buttons.first { $0.rect.contains(point) }?.action
+                } else if inBody {
+                    if panel.browser, let button = panel.browserButtons().first(where: { $0.rect.contains(point) }) {
+                        action = button.action
+                    } else if panel.browser, let card = ui.cardIndex(at: point), card < panel.visibleEntries.count {
+                        action = .entry(panel.visibleEntries.startIndex + card)
+                    } else if !panel.browser, ui.back.rect.contains(point) {
+                        action = .back
+                    } else {
+                        action = ui.grip(at: point) ?? (panel.playback != nil || panel.contentAspect != nil ? .media : nil)
+                    }
+                }
             }
             nearest = Hit(panel: panel, action: action, uv: uv, distance: hit.distance)
         }
@@ -356,7 +357,6 @@ final class Workspace {
         case .exit: wantsExit = true
         case .previous: panel.changePage(to: panel.page - 1)
         case .next: panel.changePage(to: panel.page + 1)
-        case .up: panel.browse(panel.directory.deletingLastPathComponent())
         case .back:
             if panorama === panel { panorama = nil }
             panel.browse(panel.directory)
@@ -367,7 +367,7 @@ final class Workspace {
             guard isInside(resolved, root: root) else { return }
             if entry.kind == .folder { panel.browse(resolved) }
             else {
-                panel.open(entry)
+                panel.open(entry, at: lastTime)
                 if diagnostics { print("Opened \(entry.kind.rawValue): \(entry.name)") }
             }
         case .play: panel.playback?.togglePaused()

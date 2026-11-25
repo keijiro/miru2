@@ -30,8 +30,19 @@ fragment float4 solidFragment(QuadVertex in [[stage_in]], constant float4 &color
 }
 
 fragment float4 imageFragment(QuadVertex in [[stage_in]], constant float4 &crop [[buffer(0)]],
-                              texture2d<float> image [[texture(0)]]) {
-    return outputColor(image.sample(linearClamp, crop.xy + in.uv * crop.zw));
+                              constant float &opacity [[buffer(1)]], texture2d<float> image [[texture(0)]]) {
+    return outputColor(image.sample(linearClamp, crop.xy + in.uv * crop.zw) * opacity);
+}
+
+fragment float4 ringFragment(QuadVertex in [[stage_in]], constant float &progress [[buffer(0)]]) {
+    float2 p = in.uv - 0.5;
+    float radius = length(p);
+    float aa = max(fwidth(radius), 0.001);
+    float alpha = smoothstep(0.425 - aa, 0.425, radius) * (1 - smoothstep(0.5 - aa, 0.5, radius));
+    if (alpha <= 0) discard_fragment();
+    float angle = fract(atan2(p.x, -p.y) / (2 * M_PI_F) + 1);
+    float white = angle < progress ? 0.87 : 0.345;
+    return outputColor(float4(float3(white) * alpha, alpha));
 }
 
 struct VideoParameters {

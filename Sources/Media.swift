@@ -21,7 +21,8 @@ enum MediaKind: String {
 struct MediaEntry {
     let url: URL
     let kind: MediaKind
-    var name: String { url.lastPathComponent }
+    var isParent = false
+    var name: String { isParent ? "↑ Up" : url.lastPathComponent }
 }
 
 // Directory enumeration, still-image decoding and video metadata loading stay off the XR thread.

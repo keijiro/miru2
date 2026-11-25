@@ -34,6 +34,8 @@ final class Panel {
     private(set) var litGrips: [Vec2] = []
     private(set) var gripOpacity: Float = 0
 
+    private(set) var backHighlighted = false
+
     func updateHover(_ actions: [PanelAction], delta: Float) {
         hovered = actions
         let grips = actions.compactMap { action -> Vec2? in
@@ -42,11 +44,28 @@ final class Panel {
             default: return nil
             }
         }
-        if !grips.isEmpty { litGrips = grips }
-        gripOpacity = clamp(gripOpacity + (grips.isEmpty ? -delta : delta) / 0.09, 0, 1)
+        let reveal = !grips.isEmpty || actions.contains(.back)
+        if reveal {
+            litGrips = grips
+            backHighlighted = actions.contains(.back)
+        }
+        gripOpacity = clamp(gripOpacity + (reveal ? delta : -delta) / 0.09, 0, 1)
     }
 
-    var controls = false
+    static let openingDuration = 0.125
+    static let outlineDuration = 0.110
+    private var bodyStarted: Double?
+    private(set) var mediaStarted: Double?
+    private(set) var transportChanged: Double?
+    private(set) var controls = false
+
+    func openingAge(at time: Double) -> Double { time - (bodyStarted ?? time) }
+
+    func toggleControls(at time: Double) {
+        controls.toggle()
+        transportChanged = time
+    }
+
     var pan = Vec2.zero
 
     var browser: Bool { entry == nil }
@@ -108,6 +127,8 @@ final class Panel {
             image = nil
             imageLoad = nil
             controls = false
+            transportChanged = nil
+            mediaStarted = nil
         }
         directory = url
         resetThumbnails()
@@ -153,10 +174,13 @@ final class Panel {
         }[...]
     }
 
-    func open(_ entry: MediaEntry, state: SavedPanel? = nil) {
+    func open(_ entry: MediaEntry, state: SavedPanel? = nil, at time: Double? = nil) {
         listing = nil
-        entries = []
-        resetThumbnails()
+        mediaStarted = time
+        if time == nil {
+            entries = []
+            resetThumbnails()
+        }
         self.entry = entry
         if let stored = state?.pan, stored.allFinite {
             pan = simd_clamp(stored, Vec2(repeating: -1), Vec2(repeating: 1))
@@ -177,11 +201,24 @@ final class Panel {
     }
 
     func update(hostTime: Double, cache: CVMetalTextureCache, loadThumbnails: Bool) -> Bool {
+        bodyStarted = bodyStarted ?? hostTime
+        if let start = mediaStarted, hostTime - start >= Self.outlineDuration {
+            mediaStarted = nil
+            entries = []
+            resetThumbnails()
+        }
+        if controls, transportChanged == nil, mediaStarted == nil, openingAge(at: hostTime) >= Self.openingDuration {
+            transportChanged = hostTime
+        }
         if let result = listing?.take() {
             listing = nil
             switch result {
             case .success(let entries): self.entries = entries
             case .failure(let error): listingError = error.localizedDescription
+            }
+            if directory != root {
+                let parent = MediaEntry(url: directory.deletingLastPathComponent(), kind: .folder, isParent: true)
+                entries.insert(parent, at: 0)
             }
             changePage(to: 0)
         }
@@ -201,7 +238,7 @@ final class Panel {
                 cardTextures.removeValue(forKey: url)
             }
         }
-        if loadThumbnails, thumbnailLoad == nil, let next = remainingThumbnails.popFirst() {
+        if browser, loadThumbnails, thumbnailLoad == nil, let next = remainingThumbnails.popFirst() {
             let result = MediaLoad<(URL, CGImage?)>()
             thumbnailLoad = result
             thumbnailURL = next.url
@@ -219,19 +256,11 @@ final class Panel {
                    loopStart: playback?.loopStart ?? 0, loopEnd: playback?.loopEnd)
     }
 
-    func buttons(panorama: Bool) -> [Button] {
+    func browserButtons() -> [Button] {
         let ui = ui
-        if browser {
-            var buttons = [ui.close, ui.exit]
-            if directory != root { buttons.append(ui.up) }
-            if page > 0 { buttons.append(ui.previous) }
-            if page + 1 < pageCount { buttons.append(ui.next) }
-            return buttons
-        }
-        var buttons = [ui.close, ui.back]
-        if controls, let playback {
-            buttons += ui.playbackButtons(playback, video: canShowPanorama, panorama: panorama)
-        }
+        var buttons = [ui.close, ui.exit]
+        if page > 0 { buttons.append(ui.previous) }
+        if page + 1 < pageCount { buttons.append(ui.next) }
         return buttons
     }
 }

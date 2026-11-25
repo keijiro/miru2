@@ -4,7 +4,7 @@ import Foundation
 import Metal
 
 enum PanelAction: Equatable {
-    case back, close, exit, previous, next, up, entry(Int)
+    case back, close, exit, previous, next, entry(Int)
     case media, play, mute, loopStart, loopEnd, panorama, seek
     case move(Vec2), resize(Vec2)
 }
@@ -85,13 +85,8 @@ struct PanelUI {
         return index < pageSize && card(index).contains(point) ? index : nil
     }
 
-    var header: Rect { Rect(0, 0, size.x, 0.092) }
-    var divider: Rect { Rect(Self.margin, 0.089, size.x - 2 * Self.margin, 0.0015) }
     var back: Button {
-        Button(action: .back, rect: Rect(Self.margin, 0.017, 0.12, 0.058), label: "Back")
-    }
-    var up: Button {
-        Button(action: .up, rect: Rect(Self.margin, 0.017, min(0.08, exit.rect.origin.x - Self.margin - 0.008), 0.058), label: "Up")
+        Button(action: .back, rect: Rect(0.03, 0.03, 0.15, 0.068), label: "← Back")
     }
     var close: Button {
         Button(action: .close, rect: Rect(size.x - Self.margin - 0.12, 0.017, 0.12, 0.058), label: "Close")
@@ -100,11 +95,8 @@ struct PanelUI {
         Button(action: .exit, rect: Rect(close.rect.origin.x - 0.118, 0.017, 0.108, 0.058), label: "Exit VR")
     }
 
-    func title(browser: Bool, atRoot: Bool) -> Rect {
-        let left = browser ? (atRoot ? Self.margin : up.rect.origin.x + up.rect.size.x + 0.012)
-                           : back.rect.origin.x + back.rect.size.x + 0.012
-        let right = (browser ? exit : close).rect.origin.x - 0.012
-        return Rect(left, 0.017, max(0, right - left), 0.058)
+    var title: Rect {
+        Rect(Self.margin, 0.017, max(0, exit.rect.origin.x - Self.margin - 0.012), 0.058)
     }
 
     var next: Button {
@@ -121,38 +113,43 @@ struct PanelUI {
         Rect(Self.margin, (size.y - 0.06) / 2, size.x - 2 * Self.margin, 0.06)
     }
 
-    private var compactTransport: Bool { size.x < 0.53 }
+    private var compactTransport: Bool { size.x < 0.69 }
     var transport: Rect {
-        let height: Float = compactTransport ? 0.162 : 0.107
-        return Rect(0, size.y - height, size.x, height)
+        Rect(0, size.y + Self.gripReach + 0.006, size.x, compactTransport ? 0.152 : 0.102)
     }
     var seek: Rect {
-        Rect(Self.margin, transport.origin.y + 0.008, size.x - 2 * Self.margin - 0.161, 0.035)
+        Rect(Self.margin, transport.origin.y + 0.005, size.x - 2 * Self.margin, 0.035)
     }
-    var playbackTime: Rect {
-        Rect(size.x - Self.margin - 0.15, seek.origin.y, 0.15, seek.size.y)
+    func playbackTime(video: Bool) -> Rect {
+        let right = compactTransport ? size.x - Self.margin : loopStartX(video: video) - 0.012
+        return Rect(0.098, transport.origin.y + 0.04, right - 0.098, 0.045)
+    }
+    private func loopStartX(video: Bool) -> Float {
+        let gap: Float = compactTransport ? 0.006 : 0.012
+        let loopWidth: Float = compactTransport ? 0.04 : 0.058
+        return size.x - Self.margin - (video ? 2 : 1) * (0.056 + gap) - 2 * loopWidth - gap
     }
 
     func playbackButtons(_ playback: Playback, video: Bool, panorama: Bool) -> [Button] {
-        let firstRow = transport.origin.y + 0.046
-        let secondRow = compactTransport ? firstRow + 0.055 : firstRow
-        let loopX: Float = compactTransport ? Self.margin : Self.margin + 0.24
+        let first = transport.origin.y + 0.04
+        let row = compactTransport ? first + 0.052 : first
+        let gap: Float = compactTransport ? 0.006 : 0.012
+        let width: Float = compactTransport ? 0.04 : 0.058
+        let x = loopStartX(video: video)
+        let muteX = x + 2 * (width + gap)
         var buttons = [
-            Button(action: .play, rect: Rect(Self.margin, firstRow, 0.105, 0.05),
-                   label: playback.paused ? "Play" : "Pause"),
-            Button(action: .mute, rect: Rect(Self.margin + 0.115, firstRow, 0.115, 0.05),
-                   label: playback.muted ? "Unmute" : "Mute"),
-            Button(action: .loopStart, rect: Rect(loopX, secondRow, 0.045, 0.05),
-                   label: "A", active: playback.loopStart > 0),
-            Button(action: .loopEnd, rect: Rect(loopX + 0.055, secondRow, 0.045, 0.05),
-                   label: "B", active: playback.loopEnd != nil)
+            Button(action: .play, rect: Rect(0.019, first, 0.064, 0.045), label: playback.paused ? "Play" : "Pause"),
+            Button(action: .loopStart, rect: Rect(x, row, width, 0.045), label: "[ A", active: playback.loopStart > 0),
+            Button(action: .loopEnd, rect: Rect(x + width + gap, row, width, 0.045), label: "B ]", active: playback.loopEnd != nil),
+            Button(action: .mute, rect: Rect(muteX, row, 0.056, 0.045), label: playback.muted ? "Unmute" : "Mute")
         ]
         if video {
-            buttons.append(Button(action: .panorama, rect: Rect(loopX + 0.11, secondRow, 0.125, 0.05),
-                                  label: "180° SBS", active: panorama))
+            buttons.append(Button(action: .panorama, rect: Rect(muteX + 0.056 + gap, row, 0.056, 0.045),
+                                  label: "Panorama", active: panorama))
         }
         return buttons
     }
+
 }
 
 enum PanelLabel {
@@ -238,6 +235,54 @@ struct Canvas {
                                        y: box.midY - (CTFontGetAscent(font) - CTFontGetDescent(font)) / 2)
         CTLineDraw(displayed, context)
         context.restoreGState()
+    }
+
+    func playbackIcon(_ label: String) -> Bool {
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.translateBy(x: width / 2, y: height / 2)
+        context.setFillColor(gray: 0.93, alpha: 1)
+        context.setStrokeColor(gray: 0.93, alpha: 1)
+        context.setLineWidth(1.75)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        switch label {
+        case "Play":
+            context.move(to: CGPoint(x: -6, y: -9))
+            context.addLine(to: CGPoint(x: 9, y: 0))
+            context.addLine(to: CGPoint(x: -6, y: 9))
+            context.fillPath()
+        case "Pause":
+            for x in [-8, 3] { context.fill(CGRect(x: x, y: -9, width: 5, height: 18)) }
+        case "Mute", "Unmute":
+            context.addLines(between: [CGPoint(x: -11, y: 3), CGPoint(x: -7, y: 3), CGPoint(x: -1, y: 8),
+                                       CGPoint(x: -1, y: -8), CGPoint(x: -7, y: -3), CGPoint(x: -11, y: -3)])
+            context.closePath()
+            if label == "Unmute" {
+                context.move(to: CGPoint(x: -8, y: 10))
+                context.addLine(to: CGPoint(x: 10, y: -10))
+            } else {
+                for r in [4, 8] {
+                    context.move(to: CGPoint(x: r, y: r))
+                    context.addQuadCurve(to: CGPoint(x: r, y: -r), control: CGPoint(x: r * 2, y: 0))
+                }
+            }
+            context.strokePath()
+        case "Panorama":
+            context.addArc(center: CGPoint(x: 0, y: -3), radius: 11, startAngle: 0, endAngle: .pi, clockwise: false)
+            context.strokePath()
+            context.strokeEllipse(in: CGRect(x: -11, y: -7.5, width: 22, height: 9))
+        default: return false
+        }
+        return true
+    }
+
+    func outlineButton() {
+        context.setStrokeColor(gray: 0.87, alpha: 1)
+        context.setLineWidth(1.5)
+        let box = bounds(.full).insetBy(dx: 1, dy: 1)
+        context.addPath(CGPath(roundedRect: box, cornerWidth: 5, cornerHeight: 5, transform: nil))
+        context.strokePath()
     }
 
     func folder(in rect: Rect) {

@@ -18,7 +18,8 @@ private struct PanoramaCamera {
 
 enum Material {
     case fill(Vec4)
-    case texture(MTLTexture, Rect = .full)
+    case texture(MTLTexture, Rect = .full, opacity: Float = 1)
+    case ring(Float)
     case video(VideoFrame, VideoUV)
 }
 
@@ -55,6 +56,7 @@ private struct ButtonStyle: Hashable {
 final class Renderer {
     private let device: MTLDevice
     private let solid: MTLRenderPipelineState
+    private let ring: MTLRenderPipelineState
     private let image: MTLRenderPipelineState
     private let video: MTLRenderPipelineState
     private let panoramic: MTLRenderPipelineState
@@ -88,6 +90,7 @@ final class Renderer {
             return try device.makeRenderPipelineState(descriptor: descriptor)
         }
         solid = try makePipeline("quadVertex", "solidFragment", blend: true)
+        ring = try makePipeline("quadVertex", "ringFragment", blend: true)
         image = try makePipeline("quadVertex", "imageFragment", blend: true)
         video = try makePipeline("quadVertex", "videoFragment", blend: false)
         panoramic = try makePipeline("panoramaVertex", "panoramaFragment", blend: false)
@@ -113,11 +116,20 @@ final class Renderer {
             output.panorama = (frame, playback.videoUV, workspace.panoramaYaw)
         }
         for panel in workspace.panels {
-            if panel.browser {
+            let age = panel.openingAge(at: workspace.lastTime)
+            if age < Panel.openingDuration {
+                drawOpening(.full, age: age, on: panel, output: &output)
+                continue
+            }
+            if panel.browser || panel.mediaStarted != nil {
                 prepareBrowser(panel, root: workspace.root, output: &output)
+                if let start = panel.mediaStarted {
+                    let scale = Float((workspace.lastTime - start) / Panel.outlineDuration)
+                    drawOutline(.full, scale: scale, on: panel, output: &output)
+                    continue
+                }
             } else {
-                prepareMedia(panel, header: workspace.showsHeader(panel), isPanorama: panorama === panel,
-                             output: &output)
+                prepareMedia(panel, isPanorama: panorama === panel, time: workspace.lastTime, output: &output)
             }
             if panel.gripOpacity > 0 {
                 for side: Vec2 in [[0, 1], [0, -1], [-1, 0], [1, 0], [-1, 1], [1, 1], [-1, -1], [1, -1]] {
@@ -131,7 +143,8 @@ final class Renderer {
         }
         for (placement, progress) in workspace.previews {
             output.outline(.full, on: placement, color: [0.89, 0.89, 0.89, 0.35 + progress * 0.55])
-            output.quad(placement, Rect(0.03, 0.94, progress * 0.94, 0.006), .fill([0.92, 0.92, 0.92, 0.9]))
+            let size = Vec2(repeating: 0.074) / placement.size
+            output.quad(placement, Rect((1 - size.x) / 2, (1 - size.y) / 2, size.x, size.y), .ring(progress))
         }
         for (ray, distance, pressed) in workspace.beams {
             let end = ray.point(at: max(0.07, distance - 0.006))
@@ -144,6 +157,24 @@ final class Renderer {
         return output
     }
 
+    private func drawOpening(_ bounds: Rect, age: Double, on panel: Panel, output: inout RenderFrame) {
+        let line = Float(clamp(age / 0.045, 0, 1))
+        let expand = Float(clamp((age - 0.045) / 0.050, 0, 1))
+        let stroke = Vec2(repeating: 0.0025) / panel.placement.size
+        let size = stroke + (bounds.size - stroke) * Vec2(line, expand)
+        let origin = bounds.origin + (bounds.size - size) / 2
+        let white: Float = age < 0.095 ? 0.345 : 1
+        output.quad(panel.placement, Rect(origin.x, origin.y, size.x, size.y), .fill([white, white, white, 1]))
+    }
+
+    private func drawOutline(_ bounds: Rect, scale: Float, on panel: Panel, output: inout RenderFrame) {
+        let size = bounds.size * scale
+        let metres = size * panel.placement.size
+        guard min(metres.x, metres.y) > 0.005 else { return }
+        let origin = bounds.origin + (bounds.size - size) / 2
+        output.outline(Rect(origin.x, origin.y, size.x, size.y), on: panel.placement, color: [0.87, 0.87, 0.87, 1])
+    }
+
     private func beam(from start: Vec3, to end: Vec3) -> simd_float4x4 {
         let segment = end - start
         let width = simd_cross(segment, Vec3(0, 1, 0))
@@ -152,22 +183,26 @@ final class Renderer {
                                       Vec4((start + end) * 0.5, 1)))
     }
 
-    private func drawButtons(_ buttons: [Button], on panel: Panel, output: inout RenderFrame) {
+    private func drawButtons(_ buttons: [Button], on panel: Panel, opacity: Float = 1, output: inout RenderFrame) {
         for button in buttons {
             let pixels = Canvas.pixels(for: button.rect.size)
             let style = ButtonStyle(label: button.label, pixels: pixels, active: button.active,
                                     hovered: panel.hovered.contains(button.action))
             if buttonTextures[style] == nil {
                 buttonTextures[style] = Canvas.texture(device: device, pixels: pixels) { canvas in
-                    if style.hovered || style.active {
+                    let loop = button.action == .loopStart || button.action == .loopEnd
+                    if style.hovered || (style.active && !loop) {
                         canvas.fill(.full, white: style.hovered ? 0.255 : 0.188, rounded: true)
                     }
-                    canvas.text(button.label, in: .full, size: 25, centered: true)
+                    if loop && style.active { canvas.outlineButton() }
+                    if !canvas.playbackIcon(button.label) {
+                        canvas.text(button.label, in: .full, size: loop ? 21 : 25, centered: true)
+                    }
                 }
             }
             if let texture = buttonTextures[style] {
                 output.quad(panel.placement, button.rect.normalized(in: panel.placement.size),
-                            .texture(texture), offset: 0.003)
+                            .texture(texture, opacity: opacity), offset: 0.003)
             }
         }
     }
@@ -191,15 +226,14 @@ final class Renderer {
     private func prepareBrowser(_ panel: Panel, root: URL, output: inout RenderFrame) {
         let ui = panel.ui
         output.quad(panel.placement, .full, .fill(PanelUI.background))
-        drawButtons(panel.buttons(panorama: false), on: panel, output: &output)
+        drawButtons(panel.browserButtons(), on: panel, output: &output)
         let atRoot = panel.directory == root
         let path = atRoot ? root.lastPathComponent :
             panel.directory.pathComponents.dropFirst(root.pathComponents.count).joined(separator: " / ")
-        drawLabel(path.isEmpty ? "/" : path, slot: .title, in: ui.title(browser: true, atRoot: atRoot),
+        drawLabel(path.isEmpty ? "/" : path, slot: .title, in: ui.title,
                   on: panel, size: 28, output: &output)
-        output.quad(panel.placement, ui.divider.normalized(in: ui.size), .fill([0.3, 0.3, 0.3, 1]), offset: 0.002)
         let visible = panel.visibleEntries
-        if visible.isEmpty {
+        if visible.isEmpty || panel.listingError != nil {
             let message = panel.listingError ?? (panel.loading ? "Loading…" : "No media in this folder")
             drawLabel(message, slot: .message, in: ui.message, on: panel, size: 29, centered: true, output: &output)
         }
@@ -245,7 +279,7 @@ final class Renderer {
         }
     }
 
-    private func prepareMedia(_ panel: Panel, header: Bool, isPanorama: Bool, output: inout RenderFrame) {
+    private func prepareMedia(_ panel: Panel, isPanorama: Bool, time: Double, output: inout RenderFrame) {
         guard let entry = panel.entry else { return }
         let ui = panel.ui
         let playback = panel.playback
@@ -267,13 +301,20 @@ final class Renderer {
             output.quad(panel.placement, .full, .fill(PanelUI.background))
             drawLabel(status, slot: .message, in: ui.message, on: panel, size: 29, centered: true, output: &output)
         }
-        if header {
-            output.quad(panel.placement, ui.header.normalized(in: ui.size), .fill(PanelUI.background), offset: 0.002)
-            drawButtons([ui.back, ui.close], on: panel, output: &output)
-            drawLabel(entry.name, slot: .title, in: ui.title(browser: false, atRoot: false), on: panel,
-                      size: 28, output: &output)
+        if panel.gripOpacity > 0 {
+            let opacity = panel.gripOpacity * (panel.backHighlighted ? 1 : 0.25)
+            drawButtons([ui.back], on: panel, opacity: opacity, output: &output)
         }
-        if panel.controls, let playback {
+        guard let start = panel.transportChanged, let playback else { return }
+        let age = time - start
+        let bounds = ui.transport.normalized(in: ui.size)
+        if !panel.controls {
+            if age < Panel.outlineDuration {
+                drawOutline(bounds, scale: 1 - Float(age / Panel.outlineDuration), on: panel, output: &output)
+            }
+        } else if age < Panel.openingDuration {
+            drawOpening(bounds, age: age, on: panel, output: &output)
+        } else {
             prepareTransport(panel, playback: playback, video: panel.canShowPanorama,
                              panorama: isPanorama, output: &output)
         }
@@ -285,12 +326,12 @@ final class Renderer {
         let time = clockText(playback.time), duration = clockText(playback.duration)
         output.quad(panel.placement, ui.transport.normalized(in: ui.size), .fill(PanelUI.background), offset: 0.002)
         drawButtons(ui.playbackButtons(playback, video: video, panorama: panorama), on: panel, output: &output)
-        drawLabel("\(time) / \(duration)", slot: .playbackTime, in: ui.playbackTime, on: panel,
-                  size: 22, white: 0.80, centered: true, output: &output)
+        drawLabel("\(time) / \(duration)", slot: .playbackTime, in: ui.playbackTime(video: video), on: panel,
+                  size: 21, white: 0.74, output: &output)
 
         let seek = ui.seek
         let y = seek.origin.y + seek.size.y * 0.5
-        let track = Rect(seek.origin.x, y - 0.003, seek.size.x, 0.006)
+        let track = Rect(seek.origin.x, y - 0.001, seek.size.x, 0.002)
         output.quad(panel.placement, track.normalized(in: ui.size), .fill([0.35, 0.35, 0.35, 1]), offset: 0.003)
         guard playback.duration > 0 else { return }
         let progress = Float(clamp(playback.time / playback.duration, 0, 1)) * seek.size.x
@@ -299,8 +340,11 @@ final class Renderer {
         for marker in [playback.loopStart > 0 ? playback.loopStart : nil, playback.loopEnd].compactMap({ $0 }) {
             let x = seek.origin.x + seek.size.x * Float(clamp(marker / playback.duration, 0, 1))
             let mark = Rect(x - 0.002, y - 0.012, 0.004, 0.024)
-            output.quad(panel.placement, mark.normalized(in: ui.size), .fill([0.78, 0.85, 0.97, 1]), offset: 0.0035)
+            output.quad(panel.placement, mark.normalized(in: ui.size), .fill([0.93, 0.93, 0.93, 1]), offset: 0.0035)
         }
+        let knob = Rect(seek.origin.x + progress - 0.007, y - 0.007, 0.014, 0.014)
+        output.quad(panel.placement, knob.normalized(in: ui.size), .ring(1), offset: 0.004)
+
     }
 
     func encode(_ frame: RenderFrame, into command: MTLCommandBuffer, color: MTLTexture, depth: MTLTexture,
@@ -350,10 +394,14 @@ final class Renderer {
             case .fill(var color):
                 pipeline = solid
                 encoder.setFragmentBytes(&color, length: MemoryLayout<Vec4>.stride, index: 0)
-            case .texture(let texture, let crop):
+            case .ring(var progress):
+                pipeline = ring
+                encoder.setFragmentBytes(&progress, length: MemoryLayout<Float>.stride, index: 0)
+            case .texture(let texture, let crop, var opacity):
                 pipeline = image
                 var coords = Vec4(crop.origin.x, crop.origin.y, crop.size.x, crop.size.y)
                 encoder.setFragmentBytes(&coords, length: MemoryLayout<Vec4>.stride, index: 0)
+                encoder.setFragmentBytes(&opacity, length: MemoryLayout<Float>.stride, index: 1)
                 encoder.setFragmentTexture(texture, index: 0)
             case .video(let frame, let uv):
                 pipeline = video

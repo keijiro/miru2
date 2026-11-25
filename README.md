@@ -1,6 +1,6 @@
 # miru for macOS
 
-miru is a VR media viewer for macOS built with Swift, Metal, and OXRSys. Arrange local videos, images, and audio in a spatial workspace. The background uses headset passthrough by default. Enable **180° SBS** on a compatible video to show it as a stereoscopic panorama in front of you.
+miru is a VR media viewer for macOS built with Swift, Metal, and OXRSys. Arrange local videos, images, and audio in a spatial workspace. The background uses headset passthrough by default. Select the hemisphere icon on a compatible video to show it as a stereoscopic panorama in front of you.
 
 ## Build and run
 
@@ -37,10 +37,10 @@ In the Simulator, select **Search for Server**, then **Connect**. Click the stre
 | Hold the left controller's menu button for half a second | Recenter the workspace and 180° video to face your current direction |
 | Drag a window edge or corner | Move or resize the window |
 | Move the thumbstick up or down while dragging a window edge | Adjust the window’s distance |
-| Tap a video or audio window | Show or hide playback, mute, seek, and A/B loop controls |
+| Tap a video or audio window | Show or hide the playback panel below the window |
 | Drag inside an image or video | Pan the cropped media |
-| Select **180° SBS** in the playback controls | Toggle a 180° equirectangular side-by-side video as the background, with the left eye first |
-| Point near the top edge of a media window | Reveal **Back** to return to the file browser and **Close** to close the window |
+| Select the hemisphere icon in the playback controls | Toggle a 180° equirectangular side-by-side video as the background, with the left eye first |
+| Point at the upper-left corner inside a media window or near its edges | Reveal **← Back** and the window handles. Select **← Back** to return to the browser, where **Close** closes the window |
 | Select **Exit VR** in the file browser | End the session. You can also press `Ctrl+C` in the terminal. |
 
 ## Video rendering and performance
