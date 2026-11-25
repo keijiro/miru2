@@ -106,6 +106,14 @@ final class Workspace {
         for pointer in pointers {
             pointer.hit = pointer.ray.flatMap(pick)
         }
+        for panel in panels {
+            let actions = pointers.compactMap { pointer -> PanelAction? in
+                if let grab = pointer.grab, grab.panel === panel { return grab.action }
+                guard let hit = pointer.hit, hit.panel === panel else { return nil }
+                return hit.action
+            }
+            panel.updateHover(actions, delta: delta)
+        }
         if dirty { save() }
         return updatedFrames
     }
@@ -240,13 +248,6 @@ final class Workspace {
         }
     }
 
-    func hoveredActions(_ panel: Panel) -> [PanelAction] {
-        pointers.compactMap {
-            guard let hit = $0.hit, hit.panel === panel else { return nil }
-            return hit.action
-        }
-    }
-
     var beams: [(Ray, Float, Bool)] {
         pointers.compactMap { pointer in
             guard let ray = pointer.ray else { return nil }
@@ -325,7 +326,7 @@ final class Workspace {
         for panel in panels.reversed() {
             guard let hit = panel.placement.hit(ray), hit.distance < (nearest?.distance ?? .infinity) else { continue }
             let uv = hit.uv
-            let edge = Vec2(repeating: 0.022) / panel.placement.size
+            let edge = Vec2(repeating: PanelUI.gripReach) / panel.placement.size
             guard uv.x >= -edge.x, uv.x <= 1 + edge.x, uv.y >= -edge.y, uv.y <= 1 + edge.y else { continue }
             let ui = panel.ui
             let point = uv * ui.size
@@ -339,13 +340,7 @@ final class Workspace {
             } else if panel.controls, ui.seek.contains(point), panel.playback != nil {
                 action = .seek
             } else {
-                let side: Vec2 = [
-                    uv.x < edge.x ? -1 : (uv.x > 1 - edge.x ? 1 : 0),
-                    uv.y < edge.y ? 1 : (uv.y > 1 - edge.y ? -1 : 0)
-                ]
-                if side.x != 0 && side.y != 0 { action = .resize(side) }
-                else if side != .zero { action = .move }
-                else { action = panel.playback != nil || panel.contentAspect != nil ? .media : nil }
+                action = ui.grip(at: point) ?? (panel.playback != nil || panel.contentAspect != nil ? .media : nil)
             }
             nearest = Hit(panel: panel, action: action, uv: uv, distance: hit.distance)
         }

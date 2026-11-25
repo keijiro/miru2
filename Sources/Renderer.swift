@@ -49,6 +49,7 @@ private struct ButtonStyle: Hashable {
     let label: String
     let pixels: SIMD2<Int>
     let active: Bool
+    let hovered: Bool
 }
 
 final class Renderer {
@@ -60,6 +61,8 @@ final class Renderer {
     private let depth: MTLDepthStencilState
     private let backgroundDepth: MTLDepthStencilState
     private var buttonTextures: [ButtonStyle: MTLTexture] = [:]
+
+    private var cardBackgrounds: [Bool: MTLTexture] = [:]
 
     init(device: MTLDevice, format: MTLPixelFormat, shaders: URL, sampleCount: Int) throws {
         self.device = device
@@ -110,25 +113,19 @@ final class Renderer {
             output.panorama = (frame, playback.videoUV, workspace.panoramaYaw)
         }
         for panel in workspace.panels {
-            let hovered = workspace.hoveredActions(panel)
             if panel.browser {
                 prepareBrowser(panel, root: workspace.root, output: &output)
             } else {
                 prepareMedia(panel, header: workspace.showsHeader(panel), isPanorama: panorama === panel,
                              output: &output)
             }
-            for action in hovered {
-                if case .move = action {
-                    output.outline(.full, on: panel.placement, color: [0.93, 0.93, 0.93, 0.82])
-                } else if case .resize(let side) = action {
-                    let corner = (side * Vec2(1, -1) + Vec2(repeating: 1)) * 0.5
-                    let size = Vec2(repeating: 0.052) / panel.placement.size
-                    let origin = corner * (Vec2(repeating: 1) - size)
-                    output.outline(Rect(origin.x, origin.y, size.x, size.y), on: panel.placement,
-                                   color: [0.93, 0.93, 0.93, 0.96])
-                } else if let rect = panel.buttonRect(for: action, panorama: panorama === panel) {
-                    output.outline(rect.normalized(in: panel.placement.size), on: panel.placement,
-                                   color: [0.9, 0.9, 0.9, 0.8])
+            if panel.gripOpacity > 0 {
+                for side: Vec2 in [[0, 1], [0, -1], [-1, 0], [1, 0], [-1, 1], [1, 1], [-1, -1], [1, -1]] {
+                    let alpha = panel.gripOpacity * (panel.litGrips.contains(side) ? 1 : 0.25)
+                    for rect in panel.ui.gripRects(side) {
+                        output.quad(panel.placement, rect.normalized(in: panel.ui.size),
+                                    .fill([0.87, 0.87, 0.87, alpha]))
+                    }
                 }
             }
         }
@@ -158,10 +155,13 @@ final class Renderer {
     private func drawButtons(_ buttons: [Button], on panel: Panel, output: inout RenderFrame) {
         for button in buttons {
             let pixels = Canvas.pixels(for: button.rect.size)
-            let style = ButtonStyle(label: button.label, pixels: pixels, active: button.active)
+            let style = ButtonStyle(label: button.label, pixels: pixels, active: button.active,
+                                    hovered: panel.hovered.contains(button.action))
             if buttonTextures[style] == nil {
                 buttonTextures[style] = Canvas.texture(device: device, pixels: pixels) { canvas in
-                    canvas.fill(.full, white: button.active ? 0.38 : 0.22, rounded: true)
+                    if style.hovered || style.active {
+                        canvas.fill(.full, white: style.hovered ? 0.255 : 0.188, rounded: true)
+                    }
                     canvas.text(button.label, in: .full, size: 25, centered: true)
                 }
             }
@@ -204,6 +204,15 @@ final class Renderer {
             drawLabel(message, slot: .message, in: ui.message, on: panel, size: 29, centered: true, output: &output)
         }
         for (index, entry) in visible.enumerated() {
+            let hovered = panel.hovered.contains(.entry(visible.startIndex + index))
+            if cardBackgrounds[hovered] == nil {
+                cardBackgrounds[hovered] = Canvas.texture(device: device, pixels: Canvas.pixels(for: PanelUI.cardSize)) {
+                    $0.fill(.full, white: hovered ? 0.255 : 0.161, rounded: true)
+                }
+            }
+            if let background = cardBackgrounds[hovered] {
+                output.quad(panel.placement, ui.card(index).normalized(in: ui.size), .texture(background), offset: 0.001)
+            }
             if panel.cardTextures[entry.url] == nil {
                 panel.cardTextures[entry.url] = makeCard(entry, thumbnail: panel.thumbnails[entry.url])
             }
@@ -220,10 +229,13 @@ final class Renderer {
     private func makeCard(_ entry: MediaEntry, thumbnail: CGImage?) -> MTLTexture? {
         let size = PanelUI.cardSize
         return Canvas.texture(device: device, pixels: Canvas.pixels(for: size)) { canvas in
-            canvas.fill(.full, white: 0.19, rounded: true)
             let preview = Rect(0.012, 0.009, size.x - 0.024, 0.1465).normalized(in: size)
             if let thumbnail {
                 canvas.thumbnail(thumbnail, in: preview)
+            } else if entry.kind == .folder {
+                canvas.folder(in: preview)
+            } else if entry.kind == .audio {
+                canvas.text("♪", in: preview, size: 46, white: 0.74, centered: true)
             } else {
                 canvas.fill(preview, white: 0.16, rounded: true)
                 canvas.text(entry.kind.rawValue.capitalized, in: preview, size: 24, white: 0.71, centered: true)

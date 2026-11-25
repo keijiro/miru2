@@ -30,6 +30,22 @@ final class Panel {
     private(set) var thumbnails: [URL: CGImage] = [:]
     var cardTextures: [URL: MTLTexture] = [:]
     var labelTextures: [PanelLabel: LabelTexture] = [:]
+    private(set) var hovered: [PanelAction] = []
+    private(set) var litGrips: [Vec2] = []
+    private(set) var gripOpacity: Float = 0
+
+    func updateHover(_ actions: [PanelAction], delta: Float) {
+        hovered = actions
+        let grips = actions.compactMap { action -> Vec2? in
+            switch action {
+            case .move(let side), .resize(let side): return side
+            default: return nil
+            }
+        }
+        if !grips.isEmpty { litGrips = grips }
+        gripOpacity = clamp(gripOpacity + (grips.isEmpty ? -delta : delta) / 0.09, 0, 1)
+    }
+
     var controls = false
     var pan = Vec2.zero
 
@@ -235,12 +251,5 @@ final class Panel {
             buttons += ui.playbackButtons(playback, video: canShowPanorama, panorama: panorama)
         }
         return buttons
-    }
-
-    func buttonRect(for action: PanelAction, panorama: Bool) -> Rect? {
-        if case .entry(let index) = action, visibleEntries.indices.contains(index) {
-            return ui.card(index - visibleEntries.startIndex)
-        }
-        return buttons(panorama: panorama).first { $0.action == action }?.rect
     }
 }

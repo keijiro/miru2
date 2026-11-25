@@ -6,7 +6,7 @@ import Metal
 enum PanelAction: Equatable {
     case back, close, exit, previous, next, up, entry(Int)
     case media, play, mute, loopStart, loopEnd, panorama, seek
-    case move, resize(Vec2)
+    case move(Vec2), resize(Vec2)
 }
 
 struct Button {
@@ -20,7 +20,7 @@ struct Button {
 struct PanelUI {
     static let browserMinimum: Vec2 = [0.36, 0.415]
     static let mediaMinimum: Vec2 = [0.32, 0.26]
-    static let cardSize: Vec2 = [0.307, 0.2145]
+    static let cardSize: Vec2 = [0.22, 0.22]
     static let margin: Float = 0.025
     static let background: Vec4 = [0.14, 0.14, 0.14, 1]
 
@@ -29,6 +29,35 @@ struct PanelUI {
     private static let footerHeight: Float = 0.068
 
     let size: Vec2
+
+    static let gripReach: Float = 0.055
+    private static let cornerLength: Float = 0.05
+
+    func grip(at point: Vec2) -> PanelAction? {
+        let centered = point - size / 2
+        let dx = abs(centered.x) - size.x / 2
+        let dy = abs(centered.y) - size.y / 2
+        guard max(dx, dy) <= Self.gripReach, max(dx, dy) >= -0.016 else { return nil }
+        let x: Float = dx >= -Self.cornerLength ? (centered.x < 0 ? -1 : 1) : 0
+        let y: Float = dy >= -Self.cornerLength ? (centered.y < 0 ? 1 : -1) : 0
+        let side = Vec2(x, y)
+        return x != 0 && y != 0 ? .resize(side) : .move(side)
+    }
+
+    func gripRects(_ side: Vec2) -> [Rect] {
+        let offset: Float = 0.022, stroke: Float = 0.0028
+        let corner = Self.cornerLength + offset - 0.009
+        let x = side.x < 0 ? -offset : size.x + offset - stroke
+        let y = side.y > 0 ? -offset : size.y + offset - stroke
+        if side.x == 0 {
+            return [Rect(Self.cornerLength, y, size.x - 2 * Self.cornerLength, stroke)]
+        }
+        if side.y == 0 {
+            return [Rect(x, Self.cornerLength, stroke, size.y - 2 * Self.cornerLength)]
+        }
+        return [Rect(side.x < 0 ? x : x + stroke - corner, y, corner, stroke),
+                Rect(x, side.y > 0 ? y + stroke : y + stroke - corner, stroke, corner - stroke)]
+    }
 
     var columns: Int {
         1 + Int(max(0, size.x - 2 * Self.margin - Self.cardSize.x) / Self.cardStep.x)
@@ -178,7 +207,7 @@ struct Canvas {
     func fill(_ rect: Rect, white: CGFloat, rounded: Bool = false) {
         context.setFillColor(red: white, green: white, blue: white, alpha: 1)
         if rounded {
-            context.addPath(CGPath(roundedRect: bounds(rect), cornerWidth: 9, cornerHeight: 9, transform: nil))
+            context.addPath(CGPath(roundedRect: bounds(rect), cornerWidth: 5, cornerHeight: 5, transform: nil))
             context.fillPath()
         } else {
             context.fill(bounds(rect))
@@ -189,7 +218,7 @@ struct Canvas {
         _ value: String, in rect: Rect, size: CGFloat, white: CGFloat = 0.93, centered: Bool = false
     ) {
         let box = bounds(rect)
-        let font = CTFontCreateUIFontForLanguage(.system, size, nil) ?? CTFontCreateWithName("Helvetica" as CFString, size, nil)
+        let font = CTFontCreateWithName("HelveticaNeue-Thin" as CFString, size, nil)
         let attributes = [
             kCTFontAttributeName: font,
             kCTForegroundColorAttributeName: CGColor(gray: white, alpha: 1)
@@ -206,6 +235,20 @@ struct Canvas {
         context.textPosition = CGPoint(x: centered ? box.midX - length / 2 : box.minX,
                                        y: box.midY - (CTFontGetAscent(font) - CTFontGetDescent(font)) / 2)
         CTLineDraw(displayed, context)
+        context.restoreGState()
+    }
+
+    func folder(in rect: Rect) {
+        let box = bounds(rect)
+        context.saveGState()
+        context.translateBy(x: box.midX, y: box.midY)
+        context.setStrokeColor(gray: 0.74, alpha: 1)
+        context.setLineWidth(1.75)
+        context.addLines(between: [CGPoint(x: -30, y: -21), CGPoint(x: -30, y: 23),
+                                   CGPoint(x: -8, y: 23), CGPoint(x: 1, y: 15),
+                                   CGPoint(x: 30, y: 15), CGPoint(x: 30, y: -21)])
+        context.closePath()
+        context.strokePath()
         context.restoreGState()
     }
 
