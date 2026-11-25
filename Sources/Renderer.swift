@@ -96,7 +96,8 @@ final class Renderer {
     func prepare(_ workspace: Workspace) -> RenderFrame {
         var output = RenderFrame()
         output.quads.reserveCapacity(workspace.panels.count * 4 + 12)
-        if let panel = workspace.panorama, let playback = panel.playback, let frame = playback.frame {
+        let panorama = workspace.panorama
+        if let playback = panorama?.playback, let frame = playback.frame {
             output.panorama = (frame, playback.videoUV, workspace.panoramaYaw)
         }
         for panel in workspace.panels {
@@ -104,7 +105,7 @@ final class Renderer {
             if panel.browser {
                 prepareBrowser(panel, root: workspace.root, output: &output)
             } else {
-                prepareMedia(panel, header: workspace.showsHeader(panel), isPanorama: workspace.panorama === panel,
+                prepareMedia(panel, header: workspace.showsHeader(panel), isPanorama: panorama === panel,
                              output: &output)
             }
             for action in hovered {
@@ -190,7 +191,11 @@ final class Renderer {
         guard let entry = panel.entry else { return }
         let playback = panel.playback
         if let frame = playback?.frame, let playback {
-            output.quad(panel.placement, .full, .video(frame, playback.videoUV.cropped(to: panel.mediaCrop)))
+            if isPanorama {
+                output.outline(.full, on: panel.placement, color: [0.93, 0.93, 0.93, 0.35])
+            } else {
+                output.quad(panel.placement, .full, .video(frame, playback.videoUV.cropped(to: panel.mediaCrop)))
+            }
         } else if let texture = panel.image {
             output.quad(panel.placement, .full, .fill([0.07, 0.07, 0.07, 1]))
             output.quad(panel.placement, .full, .texture(texture, panel.mediaCrop), offset: 0.0005)
@@ -281,6 +286,7 @@ final class Renderer {
         if let (frame, uv, yaw) = frame.panorama {
             encoder.setRenderPipelineState(panoramic)
             encoder.setDepthStencilState(backgroundDepth)
+            // Sample directions about the current eye, with the panorama yaw fixed in the room.
             let orientation = simd_quatf(angle: -yaw, axis: Vec3(0, 1, 0)) * view.pose.orientation.rotation
             // Keep bilinear luma and chroma samples in their own eye's half.
             let horizontal = abs(uv.u.x) > 0.5 ? frame.chroma.width : frame.chroma.height
