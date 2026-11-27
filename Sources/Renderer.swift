@@ -30,7 +30,7 @@ struct DrawQuad {
 
 struct RenderFrame {
     var quads: [DrawQuad] = []
-    var panorama: (VideoFrame, VideoUV, Float)?
+    var panorama: (VideoFrame, VideoUV, simd_quatf)?
 
     mutating func quad(_ placement: Placement, _ rect: Rect = .full, _ material: Material, offset: Float = 0) {
         quads.append(DrawQuad(model: placement.model(rect: rect, offset: offset), material: material))
@@ -113,7 +113,9 @@ final class Renderer {
         output.quads.reserveCapacity(workspace.panels.count * 4 + 12)
         let panorama = workspace.panorama
         if let playback = panorama?.playback, let frame = playback.frame {
-            output.panorama = (frame, playback.videoUV, workspace.panoramaYaw)
+            let inverseYaw = simd_quatf(angle: -workspace.panoramaYaw, axis: [0, 1, 0])
+            let inversePitch = simd_quatf(angle: -workspace.panoramaPitch, axis: [1, 0, 0])
+            output.panorama = (frame, playback.videoUV, inversePitch * inverseYaw)
         }
         for panel in workspace.panels {
             let age = panel.openingAge(at: workspace.lastTime)
@@ -365,11 +367,11 @@ final class Renderer {
         guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else {
             throw MiruError("Could not create a Metal render encoder")
         }
-        if let (frame, uv, yaw) = frame.panorama {
+        if let (frame, uv, roomToPanorama) = frame.panorama {
             encoder.setRenderPipelineState(panoramic)
             encoder.setDepthStencilState(backgroundDepth)
-            // Sample directions about the current eye, with the panorama yaw fixed in the room.
-            let orientation = simd_quatf(angle: -yaw, axis: Vec3(0, 1, 0)) * view.pose.orientation.rotation
+            // Rotate the eye's viewing directions into the room-aligned panorama.
+            let orientation = roomToPanorama * view.pose.orientation.rotation
             // Keep bilinear luma and chroma samples in their own eye's half.
             let horizontal = abs(uv.u.x) > 0.5 ? frame.chroma.width : frame.chroma.height
             let inset = min(0.25, 0.5 / Float(horizontal))

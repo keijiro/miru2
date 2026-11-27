@@ -15,7 +15,7 @@ Connect to your Mac from a passthrough-capable OXRSys client. For Wi-Fi streamin
 
 The first build creates `.build/runtime/oxrsys-runtime.toml` with `passthrough_enabled` and `app_alpha_blend_passthrough` enabled. If you have a configuration at `~/Library/Application Support/OXRSys/oxrsys-runtime.toml`, OXRSys gives it precedence. Enable both settings there as well.
 
-With no `--library` argument, miru opens `../miru/samples` if it exists and otherwise uses `~/Movies`. Window placement, open files, mute settings, and the active panorama are saved per library. Playback supports the video and audio formats available through AVFoundation. Audio plays through the Mac.
+With no `--library` argument, miru opens `../miru/samples` if it exists and otherwise uses `~/Movies`. Window placement, open files, mute settings, and the active panorama and its orientation are saved per library. Playback supports the video and audio formats available through AVFoundation. Audio plays through the Mac.
 
 Video and audio resume from their saved positions with their A/B loop points. Miru saves playback history when you return to the browser or quit. If you open the same file in multiple views, the last view closed supplies the saved state. When quitting with several views of the same file still open, the most recently opened view supplies it.
 
@@ -44,7 +44,8 @@ In the Simulator, select **Search for Server**, then **Connect**. Click the stre
 | Point at the file list and drag with the trigger, or tilt the pointing controller’s thumbstick up or down | Scroll through files and folders |
 | Select **↑ Up** | Return to the parent folder at its previous scroll position |
 | Tap a video or audio window | Show or hide the playback panel below the window |
-| Drag inside an image or video | Pan the cropped media |
+| Drag inside an image or flat video window | Pan the cropped media |
+| Drag inside the active panorama’s video window with the trigger | Rotate the panorama left, right, up, or down |
 | Select the hemisphere icon in the playback controls | Toggle a 180° equirectangular side-by-side video as the background, with the left eye first |
 | Point at the upper-left corner inside a media window or near its edges | Reveal **← Back** and the window handles. Select **← Back** to return to the browser, where **Close** closes the window |
 

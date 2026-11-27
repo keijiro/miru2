@@ -11,6 +11,7 @@ private struct Grab {
     let initial: Placement
     let point: Vec3
     let initialPan: Vec2
+    let initialPanoramaAngles: Vec2?
     let distance: Float
     let initialScroll: Float
     var dragTarget: Float?
@@ -40,6 +41,7 @@ private struct SavedLayout: Codable {
     var panels: [SavedPanel]
     var panorama: Int?
     var panoramaYaw: Float?
+    var panoramaPitch: Float?
     var lastBrowserDirectory: URL?
 }
 
@@ -54,6 +56,7 @@ final class Workspace {
     private(set) var panels: [Panel] = []
     private(set) var panorama: Panel?
     private(set) var panoramaYaw: Float = 0
+    private(set) var panoramaPitch: Float = 0
     private var anchor: (position: Vec3, yaw: Float)?
     private let pointers = [Pointer(), Pointer()]
     private var head = XrPosef()
@@ -153,7 +156,10 @@ final class Workspace {
         for panel in panels {
             panel.placement.center = origin.position + rotation.act(panel.placement.center - anchor.position)
         }
-        if panorama != nil { panoramaYaw = origin.yaw }
+        if panorama != nil {
+            panoramaYaw = origin.yaw
+            panoramaPitch = 0
+        }
         self.anchor = origin
 
         for pointer in pointers {
@@ -194,6 +200,8 @@ final class Workspace {
                let yaw = restored.panoramaYaw, yaw.isFinite {
                 panorama = panel
                 panoramaYaw = yaw + origin.yaw
+                let pitch = restored.panoramaPitch ?? 0
+                panoramaPitch = pitch.isFinite ? clamp(pitch, -.pi / 2, .pi / 2) : 0
             }
             self.restored = nil
         }
@@ -249,6 +257,7 @@ final class Workspace {
         let index = panorama.flatMap { active in panels.firstIndex { $0 === active } }
         let layout = SavedLayout(panels: saved, panorama: index,
                                  panoramaYaw: index.map { _ in panoramaYaw - anchor.yaw },
+                                 panoramaPitch: index.map { _ in panoramaPitch },
                                  lastBrowserDirectory: lastBrowserDirectory)
         storage.async {
             do {
@@ -342,8 +351,9 @@ final class Workspace {
                     }
                 } else if grab.action == .seek, let hit = grab.panel.placement.hit(ray) {
                     seek(grab.panel, at: hit.uv.x, precise: true)
-                } else if grab.action == .media && !grab.moved && grab.panel.playback != nil {
-                    grab.panel.toggleControls(at: time)
+                } else if grab.action == .media {
+                    if grab.initialPanoramaAngles != nil { apply(&grab, ray: ray) }
+                    if !grab.moved, grab.panel.playback != nil { grab.panel.toggleControls(at: time) }
                 }
                 if grab.dragTarget == nil { dirty = true }
             }
@@ -421,8 +431,10 @@ final class Workspace {
         let panel = hit.panel
         switch action {
         case .move, .resize, .seek, .media, .entry, .scroll:
+            let angles: Vec2? = action == .media && panorama === panel ? [panoramaYaw, panoramaPitch] : nil
             pointer.grab = Grab(panel: panel, action: action, initial: panel.placement,
-                                point: ray.point(at: hit.distance), initialPan: panel.pan, distance: hit.distance,
+                                point: ray.point(at: hit.distance), initialPan: panel.pan,
+                                initialPanoramaAngles: angles, distance: hit.distance,
                                 initialScroll: panel.scrollOffset)
             switch action {
             case .entry, .scroll:
@@ -478,6 +490,7 @@ final class Workspace {
         else {
             panorama = panel
             panoramaYaw = head.heading
+            panoramaPitch = 0
         }
         if diagnostics { print("180° background \(panorama == nil ? "off" : "on").") }
     }
@@ -526,11 +539,19 @@ final class Workspace {
             let diff = ray.point(at: intersection.distance) - grab.point
             guard grab.moved || simd_length(diff) > 0.016 else { return }
             grab.moved = true
-            let overflow = panel.mediaOverflow
-            let local = grab.initial.localOffset(diff) * Vec2(1, -1)
-            let change = Vec2(overflow.x > 0.0001 ? local.x * 2 / overflow.x : 0,
-                              overflow.y > 0.0001 ? local.y * 2 / overflow.y : 0)
-            panel.pan = simd_clamp(grab.initialPan + change, Vec2(repeating: -1), Vec2(repeating: 1))
+            let local = grab.initial.localOffset(diff)
+            if let angles = grab.initialPanoramaAngles {
+                guard panorama === panel else { return }
+                // A full window-width or height drag rotates the corresponding axis by 90°.
+                let change = local / grab.initial.size * Vec2(-.pi / 2, .pi / 2)
+                panoramaYaw = (angles.x + change.x).remainder(dividingBy: 2 * .pi)
+                panoramaPitch = clamp(angles.y + change.y, -.pi / 2, .pi / 2)
+            } else {
+                let overflow = panel.mediaOverflow
+                let change = Vec2(overflow.x > 0.0001 ? local.x * 2 / overflow.x : 0,
+                                  overflow.y > 0.0001 ? -local.y * 2 / overflow.y : 0)
+                panel.pan = simd_clamp(grab.initialPan + change, Vec2(repeating: -1), Vec2(repeating: 1))
+            }
         default: break
         }
     }
