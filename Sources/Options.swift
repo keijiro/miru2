@@ -20,14 +20,7 @@ struct Options {
 
     init(arguments: [String]) throws {
         let files = FileManager.default
-        let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
-        let project = executable.deletingLastPathComponent().deletingLastPathComponent()
-        let sampleFolder = project.deletingLastPathComponent().appendingPathComponent("miru/samples", isDirectory: true)
-        let movies = files.homeDirectoryForCurrentUser.appendingPathComponent("Movies", isDirectory: true)
-        root = files.fileExists(atPath: sampleFolder.path) ? sampleFolder : movies
-        if !files.fileExists(atPath: root.path) {
-            root = URL(fileURLWithPath: files.currentDirectoryPath, isDirectory: true)
-        }
+        root = files.homeDirectoryForCurrentUser.appendingPathComponent("Movies", isDirectory: true)
         let support = files.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Miru")
         layoutDirectory = support.appendingPathComponent("Layouts")
         playbackHistoryURL = support.appendingPathComponent("Playback.json")

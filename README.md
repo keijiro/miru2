@@ -8,14 +8,14 @@ You’ll need macOS 14 or later, Xcode, Git, CMake, and Ninja. The first build f
 
 ```sh
 ./build.sh
-./run.sh --library ~/Movies
+./run.sh
 ```
 
 Connect to your Mac from a passthrough-capable OXRSys client. For Wi-Fi streaming, connect both devices to the same local network. On first launch, the workspace is empty. Aim into empty space and hold the trigger for half a second to open the file browser.
 
 The first build creates `.build/runtime/oxrsys-runtime.toml` with `passthrough_enabled` and `app_alpha_blend_passthrough` enabled. If you have a configuration at `~/Library/Application Support/OXRSys/oxrsys-runtime.toml`, OXRSys gives it precedence. Enable both settings there as well.
 
-With no `--library` argument, miru opens `../miru/samples` if it exists and otherwise uses `~/Movies`. Window placement, open files, mute settings, and the active panorama and its orientation are saved per library. Playback supports the video and audio formats available through AVFoundation. Audio plays through the Mac.
+miru uses `~/Movies` as its media library by default. Pass `--library DIRECTORY` to use a different folder. Window placement, open files, mute settings, and the active panorama and its orientation are saved per library. Playback supports the video and audio formats available through AVFoundation. Audio plays through the Mac.
 
 Video and audio resume from their saved positions with their A/B loop points. Miru saves playback history when you return to the browser or quit. If you open the same file in multiple views, the last view closed supplies the saved state. When quitting with several views of the same file still open, the most recently opened view supplies it.
 
